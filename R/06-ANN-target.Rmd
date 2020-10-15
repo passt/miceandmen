@@ -1,0 +1,746 @@
+---
+title: "ANN target"
+author: "PS Stumpf"
+date: "2017-2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Requirements
+
+Before running this Markdown go back and run __04-pre-Processing-for-ML.Rmd__ and __05-ANN-source.Rmd__.
+
+
+# Re-training (transfer learning)
+
+```{r}
+ksplits = 5 
+nExmpl  = c(0:10, 15, 20, 25, 30)
+```
+
+## Re-train using human data only
+
+### Clone mouse-only models
+
+```{r cloneModels}
+lledom <- list(list(), list(), list(), list(), list(), 
+               list(), list(), list(), list(), list(), 
+               list(), list(), list(), list(), list())
+
+Sys.time()
+for (fold in 1:ksplits){
+  for (i in 1:15)
+  lledom[[i]][[fold]] = keras::load_model_hdf5(filepath = paste0('2019-10-24-ML_NN_1hidden1softmax_Model', fold, '.hdf5'))
+}
+Sys.time()
+```
+
+### Set up training data, test data, batches
+
+Exclude cells that have been identified as endothelial cells, megakaryocytes or basophils, in order to avoid changing weights reflecting the impurity of training data.
+
+```{r ExcludeUnrepresentedHumanClass}
+#not represented in human unsupervised clustering:
+h.NAclust <- modell.predict.human.consensus %in% c('Endothelial Cells', 'Megakaryocytes', 'Basophils')
+```
+
+Create a stratified sample into train and test set.
+
+```{r SplitHumanData}
+# stratified sampling excluding un-represented classes
+h.kfold <- (1:length(hIdent))[!h.NAclust] %>% split(hIdent[!h.NAclust]) # %>% lapply(kfold, ksplits=2)
+```
+
+Sample 1, 2, 4, 8, 16, 32 for re-training. Keep track of which ones used.
+
+```{r humanTrainValTestindices}
+# empty list to contain training indices
+htrainix <- list()
+
+for (i in 1:5) {
+  
+ htrainix[[i]] <- 
+  h.kfold %>% lapply(function(x){
+    
+    x %>% setdiff(unlist(htrainix)) %>%  sample(size = 8, replace = F, prob = NULL) }) 
+}
+
+htestix <- h.kfold %>% lapply(function(x){ x %>% setdiff(unlist(htrainix)) })
+htrainix <- htrainix %>% lapply(do.call, what=cbind) %>% abind::abind(along=3)
+```
+
+Reshape identity vector to one hot with same order as y.mouse.label
+
+```{r OneHotHuman14class}
+y.human.label <- hIdent %>% as.vector %>% factor(levels=levels(mIdent))
+  table(y.human.label)
+
+y.human.label <- to_categorical(as.numeric(y.human.label)-1, 14)
+  colSums(y.human.label)
+```
+
+### Retrain on batches of human data
+
+Assess performance after each batch. Stop once saturated (used up all data). Now assess differences in weights.
+
+```{r reTrainHuman}
+nExmpl <- c(0:10, 15, 20, 25, 30)
+
+# extract test indices
+ix.test.hs <- htestix %>% unlist %>% as.numeric
+x.test <- x.human[ix.test.hs, ] 
+
+hstry <- list(list(), list(), list(), list(), list(), 
+              list(), list(), list(), list(), list(), 
+              list(), list(), list(), list(), list()) # empty list of lists
+lledom.predict.p <- hstry # same as above
+lledom.predict   <- hstry # same as above
+
+
+# Loop over k-folds and re-train each using the same data:
+for (fold in 1:ksplits) {
+  cat('Fold: ' , fold, '\t i: ')
+  
+  # extract training indices for fold k (reshape array to matrix with dim 32x11)
+  ix.train.hs.k <- htrainix[ , ,-fold] %>% matrix(nrow = 4, byrow = T) %>% matrix(nrow=32)
+  ix.val.hs     <- htrainix[ , , fold] %>% as.vector
+  
+  # loop over i
+  for (i in 15:1) {
+    cat(i, '\t')
+    
+    if (i>1){
+      
+    # select 1:2^(i-1) examples i.e. the first c(1,2,4,8,16,32) and flatten matrix
+    ix.train.hs <- ix.train.hs.k[1:nExmpl[i],] %>% as.vector
+    
+    # extract training data for fold
+    x.train <- x.human[ix.train.hs, ]
+    y.train <- y.human.label[ix.train.hs, ]
+    
+    # extract validation data - this IS DEPENDENT on fold AND on number of training examples
+    x.val <- x.human[ix.val.hs, ]
+    y.val <- y.human.label[ix.val.hs, ]
+    
+    # replace if number of examples exceeds number of samples
+    if (nExmpl[i] < 5) {
+      rplce = T 
+    } else { rplce = F}
+    
+    # fit generator samples euqally across all classes (5 examples)
+    gen <- function(){
+      if (nExmpl[i] == 1){
+        ix.batch <- rep(1:11, each=5)
+      }
+      # sample for each batch
+      ix.batch <- tapply(1:nrow(x.train), hIdent[ix.train.hs], sample, size=5, replace=rplce) %>%
+                      unlist %>% as.vector
+      x.batch <- x.train[ix.batch,]
+      y.batch <- y.train[ix.batch,]
+      return(list(x.batch, y.batch))
+    }
+  
+    # Train the model
+    hstry[[i]][[fold]] <- 
+        lledom[[i]][[fold]] %>% fit_generator(
+          generator = gen, 
+          steps_per_epoch = 30 * nExmpl[i] / 30,
+          epochs = 21, 
+          validation_data = list(x.val, y.val),
+          verbose = 1, 
+    )
+    }
+  # predict probabilities for softmax classification
+  lledom.predict.p[[i]][[fold]] <- lledom[[i]][[fold]] %>% predict(x.test)
+  
+  # Predict labels for validation data
+  x.test.class <- lledom.predict.p[[i]][[fold]] %>% apply(1, function(x){which.max(x)})
+  lledom.predict[[i]][[fold]] <- factor(y.mapping[x.test.class,2], levels = y.mapping[,2])
+    # list( predicted = factor(y.mapping[x.test.class,2], levels = y.mapping[,2]), 
+    #       true = hIdent[ix.test.hs] ) 
+  rm(x.test.class)
+  
+  }
+}
+```
+
+### Save models (target, transfer, ANN)
+
+```{r}
+# # Save Models (ANN transfer)
+# Sys.time()
+# for (fold in 1:ksplits){
+#   for (i in 1:15)
+#   keras::save_model_hdf5(lledom[[i]][[fold]],
+#             filepath = paste0('../Models/Target/ANN/transfer/Target-ANN-transfer-Model', fold, '_n',nExmpl[i], '.hdf5'),
+#             overwrite = FALSE)
+# }
+# Sys.time()
+# 
+# # indices
+# save(htestix, h.kfold, htrainix, lledom.predict, lledom.predict.p, file='../Models/Target/ANN/transfer/Target-ANN-transfer-xValSplits.RData')
+```
+
+
+### Load models (target, transfer, ANN)
+
+```{r}
+lledom <- list(list(), list(), list(), list(), list(), 
+               list(), list(), list(), list(), list(), 
+               list(), list(), list(), list(), list())
+
+Sys.time()
+for (fold in 1:ksplits){
+  for (i in 1:15)
+  lledom_test[[i]][[fold]] = keras::load_model_hdf5(filepath =
+    paste0('../Models/Target/ANN/transfer/Target-ANN-transfer-Model', fold, '_n',nExmpl[i], '.hdf5'))
+}
+Sys.time()
+
+load('../Models/Target/Target-xValSplits.RData')
+
+```
+
+
+
+```{r AccuracyConfusion, fig.width=4, fig.asp=1}
+cfmllemod.freq <- list(list(), list(), list(), list(), list(), 
+                       list(), list(), list(), list(), list(), 
+                       list(), list(), list(), list(), list())
+# Order of rows & columns
+cfm.order <- c("HSPCs", "Erythroblasts", "Monoblasts", "Monocytes", "Myeloblasts", "Myelocytes", "Neutrophils",
+               "Pro-B", "Pre-B", "T-NK", "Pericytes",  "Endothelial Cells",    "Megakaryocytes", "Basophils")
+
+metricsTL <- list()
+
+ix.test.hs <- htestix %>% unlist %>% as.numeric
+nExmpl <- c(0:10, 15, 20, 25, 30)
+
+for (i in 1:15) {
+  
+  # Average Confusion Matrix (percent)
+  cfmllemod.freq[[i]] <- lledom.predict[[i]] %>% lapply(FUN=function(x){
+    table(list(predicted=factor(x, levels=levels(hIdent)),
+               true=hIdent[ix.test.hs]))}) %>%
+    lapply(function(cfm) { cfm %>% apply(1, function(cfm.row) { cfm.row / sum(cfm.row) } ) }) %>%
+    abind::abind(along=3) %>% apply(MARGIN = 1:2, mean)
+  # re-order
+  cfmllemod.freq[[i]] <- cfmllemod.freq[[i]][cfm.order[1:11], cfm.order[1:11]]
+  
+  # Visualize average across k-fold cross-val as heatmap
+  heatmap(cfmllemod.freq[[i]], scale='none', Rowv=NA, Colv=NA, revC=TRUE,
+          asp=1, cexRow=1, cexCol=1, margins=c(10,8),
+          col=marray::maPalette(low='#efefef', high='#08306b', k = 100))
+  
+  # Overall Performance (percent)
+  cat('Average performance:', nExmpl[i],' training examples per class \n \n')
+  metricsTL[[i]] <- lledom.predict[[i]] %>% lapply(FUN=function(x){
+    table(list(predicted=factor(x, levels=levels(hIdent)),
+               true=hIdent[ix.test.hs]))}) %>%
+    lapply(FUN=function(x) { precall(x) %>% abind::abind(along=0) }) %>% abind::abind(along=3)
+  cat('\n')
+}
+
+# reshape list to array
+metricsTL <- metricsTL %>% abind::abind(along=4)
+
+```
+
+
+
+```{r}
+par(mar=c(4,4,1,1)+.1, pty='s')
+# balanced accuracy
+metricsTL %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['balanced Accuracy',,] %>% as.vector %>% plot(x=rep(nExmpl, each=5), y=., xlab='# training examples', ylim=c(0,1), xaxt='n', las=1, cex=.5)
+axis(1, at=nExmpl,las=1)
+metricsTL %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['balanced Accuracy',,] %>% apply(2, mean, na.rm=T) %>% lines(x=nExmpl, y=., lwd=2)
+
+# precision
+metricsTL %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['precision',,] %>% as.vector %>%
+  points(x=rep(nExmpl, each=5), y=., pch=2, col='blue', cex=.5)
+metricsTL %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['precision',,] %>% apply(2, mean, na.rm=T) %>%
+  lines(x=nExmpl, y=., col='blue', lwd=2)
+
+# recall
+metricsTL %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['recall',,] %>% as.vector %>%
+  points(x=rep(nExmpl, each=5), y=., pch=6, col='cyan', cex=.5)
+metricsTL %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['recall',,] %>% apply(2, mean, na.rm=T) %>%
+  lines(x=nExmpl, y=., col='cyan', lwd=2)
+
+# f1
+metricsTL %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['F1',,] %>% as.vector %>%
+  points(x=rep(nExmpl, each=5), y=., pch=8, col='lightseagreen', cex=.5)
+metricsTL %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['F1',,] %>% apply(2, mean, na.rm=T) %>%
+  lines(x=nExmpl, y=., col='lightseagreen', lwd=2)
+
+
+abline(h = .90, lty=3, col='red')
+
+legend('bottomright', legend = c('bal.acc.', 'precision', 'recall', 'F1'), col=c('black', 'cyan', 'blue', 'lightseagreen'), pch = c(1,2,6, 8), lty=1)
+```
+
+
+```{r}
+heatmap(metricsTL['balanced Accuracy', , , ] %>% apply(c(1,3), mean),
+        revC = T,  scale='none', Colv = NA, las=1, 
+        col=marray::maPalette(low = '#662506', mid='#fe9929', high = '#ffffe5', k = 100), zlim=c(0,1),
+        xlab='# training examples', labCol = nExmpl,
+        margins=c(5,10))
+```
+
+```{r HeatCol-metrics, fig.width=3, fig.asp=1}
+par(mar=c(7, 3, 7, 3))
+image(as.matrix(1:100), col=marray::maPalette(low = '#662506', mid='#fe9929', high = '#ffffe5', k = 100), axes=F, asp=1); box()
+axis(1, at = c(0,1), labels = c('0','1'), line = 0, las=1)
+mtext(side = 3, text = 'Fraction', line = 0.5)
+
+```
+
+
+
+```{r}
+col <- sapply(unique(hBMMNC@meta.data$NN_predict.consensus),
+              function(x) { as.vector(mAnnot.res1.1$DPcolor[mAnnot.res1.1$CellType == x][1])})
+
+for (metr in rownames(metricsTL)){
+par(pty='s', mar=c(4,4,1,1)+.1)
+plot(x = nExmpl,
+     y = metricsTL[metr, 1, , ] %>% apply(2, mean) ,
+     type='l', las=1, ylim=c(0,1),
+     xlab='# training examples', ylab=metr,
+     col=col[colnames(metricsTL)[i]])
+ for (i in 2:11) {
+    lines(x=nExmpl,
+          y=metricsTL[metr, i, , ] %>% apply(2, mean),
+          col=col[colnames(metricsTL)[i]])
+ }
+metricsTL %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .[metr,,] %>% apply(2, mean, na.rm=T)  %>% 
+lines(x = nExmpl,
+      y = ., lty=3, lwd=2, pch=19)
+}
+```
+
+
+### Feature Plot 
+
+Use consensus of predicted labels to color-code tSNE map.
+
+```{r FeaturePlotPrediction, fig.width=4, fig.asp=1}
+col <- sapply(unique(hBMMNC@meta.data$NN_predict.lledom),
+       function(x) { as.vector(mAnnot.res1.1$DPcolor[mAnnot.res1.1$CellType == x][1])})
+col['training'] <- NA
+col['validation'] <- NA
+# col['unrepresented'] <- NA
+
+
+# match colors from mBMMNC annotation.1.1
+aplot <- TSNEPlot(object = hBMMNC, do.return = T, do.label = F,  no.legend=T,
+                  group.by = 'NN_predict.consensus.lledom',
+                  colors.use = col, pt.size = 0.5,
+                  cells.use = names(hBMMNC@ident)[sample(ix.test.hs, length(ix.test.hs))]) #1:9394, 9394)])#
+aplot + theme(aspect.ratio=1) + coord_fixed()
+```
+
+
+# Train models from random
+
+```{r}
+# train for
+nExmpl <- c(0:10, 15, 20, 25, 30)
+
+# modellOA <- list(list(), list(), list(), list(), list(),
+#                  list(), list(), list(), list(), list(),
+#                  list(), list(), list(), list(), list())
+# hstry <- modellOA # empty list of lists
+modellOA.predict.p <- modellOA # same as above
+modellOA.predict   <- modellOA # same as above
+
+
+# extract test indices
+ix.test.hs <- htestix %>% unlist %>% as.numeric
+x.test <- x.human[ix.test.hs, ] 
+
+# Loop over k-folds and re-train each using the same data:
+for (fold in 1:ksplits) {
+  cat('Fold: ' , fold, '\t i: ')
+  
+  # extract training indices for fold k (reshape array to matrix with dim 32x11)
+  ix.train.hs.k <- htrainix[ , ,-fold] %>% matrix(nrow = 4, byrow = T) %>% matrix(nrow=32)
+  ix.val.hs     <- htrainix[ , , fold] %>% as.vector
+  
+  # loop over i
+  for (i in 1:15) {
+    cat(i, '\t')
+    
+    
+    if(nExmpl[i]<1) {
+      ix.train.hs <- ix.train.hs.k[1,] %>% as.vector
+    } else{ 
+      # select 1:2^(i-1) examples i.e. the first c(1,2,4,8,16,32) and flatten matrix
+      ix.train.hs <- ix.train.hs.k[1:nExmpl[i],] %>% as.vector
+    }
+      # extract training data for fold
+      x.train <- x.human[ix.train.hs, ]
+      y.train <- y.human.label[ix.train.hs, ]
+    
+      # extract validation data - this IS DEPENDENT on fold AND on number of training examples
+      x.val <- x.human[ix.val.hs, ]
+      y.val <- y.human.label[ix.val.hs, ]
+    
+    # # Define the model
+    # inputs <- layer_input(shape = ncol(x.human))
+    # predictions <- inputs %>%
+    #   layer_dropout(rate = 0.5)                                  %>% # Dropout
+    #   layer_dense(units = 16, activation = 'relu',
+    #               kernel_regularizer = regularizer_l1(l=0.001))  %>% # Dense (16)
+    #   layer_dense(units = 14, activation = 'softmax')                # Softmax (14)
+    # 
+    # # Put pieces together
+    # modellOA[[i]][[fold]] <- keras_model(inputs = inputs, outputs = predictions)
+    # 
+    # # Compile the model
+    # modellOA[[i]][[fold]] %>% compile(
+    #   loss = 'categorical_crossentropy',
+    #   optimizer = optimizer_rmsprop(),
+    #   metrics = c('accuracy')
+    # )
+    # 
+    # # replace if number of examples exceeds number of samples
+    # if (nExmpl[i] < 5) {
+    #   rplce = T 
+    # } else { rplce = F}
+    # 
+    # # fit generator samples euqally across all classes (5 examples)
+    # gen <- function(){
+    #   if (nExmpl[i] == 1){
+    #     ix.batch <- rep(1:11, each=5)
+    #   }
+    #   # sample for each batch
+    #   ix.batch <- tapply(1:nrow(x.train), hIdent[ix.train.hs], sample, size=5, replace=rplce) %>%
+    #     unlist %>% as.vector
+    #   x.batch <- x.train[ix.batch,]
+    #   y.batch <- y.train[ix.batch,]
+    #   return(list(x.batch, y.batch))
+    # }
+    # 
+    # if (nExmpl[i] > 0){
+    # 
+    #   # Train the model
+    #   hstry[[i]][[fold]] <- 
+    #     modellOA[[i]][[fold]] %>% fit_generator(
+    #       generator = gen, 
+    #       steps_per_epoch = 30 * nExmpl[i] / 30,
+    #       epochs = 21, 
+    #       validation_data = list(x.val, y.val),
+    #       verbose = 1)
+    #   }
+    
+    # predict probabilities for softmax classification
+    modellOA.predict.p[[i]][[fold]] <- modellOA[[i]][[fold]] %>% predict(x.test)
+    
+    # Predict labels for validation data
+    x.test.class <- modellOA.predict.p[[i]][[fold]] %>% apply(1, function(x){which.max(x)})
+    modellOA.predict[[i]][[fold]] <- factor(y.mapping[x.test.class,2], levels = y.mapping[,2])
+    # list( predicted = factor(y.mapping[x.test.class,2], levels = y.mapping[,2]), 
+    #       true = hIdent[ix.test.hs] ) 
+    rm(x.test.class)
+    
+  }
+}
+```
+
+
+### Save models (target, random, ANN)
+
+```{r}
+# Sys.time()
+# for (fold in 1:ksplits){
+#   for (i in 1:15)
+#   keras::save_model_hdf5(modellOA[[i]][[fold]],
+#                          filepath = paste0('../Models/Target/ANN/random/Target_ANN_random_Model', fold, '_n', nExmpl[i], '.hdf5'),
+#                          overwrite = TRUE)
+# }
+# Sys.time()
+```
+
+### Load models (target, random, ANN)
+
+```{r}
+modellOA <- list(list(), list(), list(), list(), list(), 
+                 list(), list(), list(), list(), list(), 
+                 list(), list(), list(), list(), list())
+
+Sys.time()
+for (fold in 1:ksplits){
+  for (i in 1:15)
+  modellOA[[i]][[fold]] <- keras::load_model_hdf5(
+                         filepath = paste0('../Models/Target/ANN/random/Target_ANN_random_Model', fold, '_n',nExmpl[i], '.hdf5'))
+  }
+Sys.time()
+
+load('../Models/Target/Target-xValSplits.RData')
+
+```
+
+
+## Model Performance
+
+```{r}
+source('./other/precision_recall_balAcc.R')
+```
+
+
+### Confusion Matrix
+
+```{r AccuracyConfusion, fig.width=4, fig.asp=1}
+cfmOA.freq <- list(list(), list(), list(), list(), list(), 
+                   list(), list(), list(), list(), list(),
+                   list(), list(), list(), list(), list())
+
+# Order of rows & columns
+cfm.order <- c("HSPCs", "Erythroblasts", "Monoblasts", "Monocytes", "Myeloblasts", "Myelocytes", "Neutrophils",
+               "Pro-B", "Pre-B", "T-NK", "Pericytes",  "Endothelial Cells",    "Megakaryocytes", "Basophils")
+
+metricsOA <- list()
+
+for (i in 1:15) {
+# Average Confusion Matrix (percent)
+cfmOA.freq[[i]] <- modellOA.predict[[i]] %>% lapply(FUN=function(x){
+  table(list(predicted=factor(x, levels=levels(hIdent)),
+             true=hIdent[ix.test.hs]))}) %>%
+  lapply(function(cfm) { cfm %>% apply(1, function(cfm.row) { cfm.row / sum(cfm.row) } ) }) %>%
+  abind::abind(along=3) %>% apply(MARGIN = 1:2, mean)
+# re-order
+cfmOA.freq[[i]] <- cfmOA.freq[[i]][cfm.order[1:11], cfm.order[1:11]]
+
+# Visualize average across k-fold cross-val as heatmap
+heatmap(cfmOA.freq[[i]], scale='none', Rowv=NA, Colv=NA, revC=TRUE,
+        asp=1, cexRow=1, cexCol=1, margins=c(10,8),
+        col=marray::maPalette(low='#efefef', high='#08306b', k = 100))
+
+# Overall Performance (percent)
+cat('Average performance:', nExmpl[i],' training examples per class \n \n')
+metricsOA[[i]] <- modellOA.predict[[i]] %>% lapply(FUN=function(x){
+    table(list(predicted=factor(x, levels=levels(hIdent)),
+               true=hIdent[ix.test.hs]))}) %>%
+    lapply(FUN=function(x) { precall(x) %>% abind::abind(along=0) }) %>% abind::abind(along=3)
+cat('\n')
+}
+
+# reshape list to array
+metricsOA <- metricsOA %>% abind::abind(along=4)
+
+```
+
+
+
+```{r, fig.asp=1, fig.width=4}
+par(mar=c(4,4,1,1)+.1, pty='s')
+# balanced accuracy
+metricsOA %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['balanced Accuracy',,] %>% as.vector %>% plot(x=rep(nExmpl, each=5), y=., xlab='# training examples', ylim=c(0,1), xaxt='n', las=1, cex=.5)
+axis(1, at=nExmpl,las=1)
+metricsOA %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['balanced Accuracy',,] %>% apply(2, mean, na.rm=T) %>% lines(x=nExmpl, y=., lwd=2)
+
+# precision
+metricsOA %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['precision',,] %>% as.vector %>%
+  points(x=rep(nExmpl, each=5), y=., pch=2, col='blue', cex=.5)
+metricsOA %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['precision',,] %>% apply(2, mean, na.rm=T) %>%
+  lines(x=nExmpl, y=., col='blue', lwd=2)
+
+# recall
+metricsOA %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['recall',,] %>% as.vector %>%
+  points(x=rep(nExmpl, each=5), y=., pch=6, col='cyan', cex=.5)
+metricsOA %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['recall',,] %>% apply(2, mean, na.rm=T) %>%
+  lines(x=nExmpl, y=., col='cyan', lwd=2)
+
+abline(h = .90, lty=3, col='red')
+
+legend('bottomright', legend = c('bal.acc.', 'precision', 'recall'), col=c('black', 'cyan', 'blue'), pch = c(1,2,6), lty=1)
+```
+
+# Comparison transfer vs random
+
+```{r, fig.asp=1, fig.width=3}
+par(mar=c(4,4,1,1)+.1, pty='s')
+
+atl <- metricsTL %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['F1',,]
+aoa <- metricsOA %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .['F1',,]
+
+# balanced accuracy
+atl %>% as.vector %>% plot(x=rep(nExmpl, each=5), y=., xlab='# training examples', ylim=c(0,1), xaxt='n', las=1, cex=.75, col='black')
+axis(1, at=nExmpl,las=1)
+atl %>% apply(2, mean, na.rm=T) %>% lines(x=nExmpl, y=., lwd=2, col='black')
+
+# balanced accuracy - random
+aoa %>% as.vector %>% points(x=rep(nExmpl, each=5), y=., xlab='# training examples',  cex=.75,  col='grey')
+axis(1, at=nExmpl,las=1)
+aoa %>% apply(2, mean, na.rm=T) %>% lines(x=nExmpl, y=., lwd=2, col='grey')
+
+# p-val
+sapply(1:15, function(i) {t.test(x=atl[,i], y=aoa[,i], paired = T, alternative='greater')$p.value %>% p.adjust(method='BH') %>% -log10(.)}) %>%
+  plot(x=nExmpl, y=., ylim=c(0,7), las=1, type='b', cex=.75, col='cyan')
+axis(1, at=nExmpl,las=1)
+abline(h=-log10(0.01), col='magenta', lty=3)
+```
+
+
+```{r}
+# datOA <- metricsOA['F1', , , ] %>% apply(c(1,3), mean, na.rm=T)
+
+# # re-order dendrogram
+# gen <- as.matrix(datOA) %>% dist(method='euclidean') %>% hclust(method='complete') %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
+
+# datTL <- metricsTL['F1', , , ] %>% apply(c(1,3), mean, na.rm=T)
+# ctyp <- as.matrix(datTL) %>% dist(method='euclidean') %>% hclust(method='complete') %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
+
+
+heatmap(datTL, Rowv = ctyp, #metricsTL['F1', , , ] %>% apply(c(1,3), mean, na.rm=T),
+        revC = T,  scale='none', Colv = NA, las=1, 
+        col=c(marray::maPalette(low = '#8e0152', mid='#de77ae', high = '#F7F7F7', k = 50),
+              marray::maPalette(low = '#F7F7F7', mid='#7FBC41', high = '#276419', k = 51))[-50],
+        # col=marray::maPalette(low = '#F7F7F7', mid='#7FBC41', high = '#276419', k = 51),
+        zlim=c(0,1),
+        xlab='# training examples', labCol = nExmpl,
+        margins=c(5,10))
+```
+
+
+
+```{r HeatCol-metrics2, fig.width=3, fig.asp=1}
+
+par(mar=c(7, 3, 7, 3))
+image(as.matrix(1:100), col= c(marray::maPalette(low = '#8e0152', mid='#de77ae', high = '#F7F7F7', k = 50),
+                               marray::maPalette(low = '#F7F7F7', mid='#7FBC41', high = '#276419', k = 51))[-50],
+      axes=F, asp=1); box()
+axis(1, at = c(0,1), labels = c('0','1'), line = 0, las=1)
+mtext(side = 3, text = 'Fraction', line = 0.5)
+
+```
+
+
+
+```{r}
+col <- sapply(unique(hBMMNC@meta.data$NN_predict.consensus),
+              function(x) { as.vector(mAnnot.res1.1$DPcolor[mAnnot.res1.1$CellType == x][1])})
+
+for (metr in rownames(metricsOA)){
+par(pty='s', mar=c(4,4,1,1)+.1)
+plot(x = nExmpl,
+     y = metricsOA[metr, 1, , ] %>% apply(2, mean) ,
+     type='l', las=1, ylim=c(0,1),
+     xlab='# training examples', ylab=metr,
+     col=col[colnames(metricsOA)[i]])
+ for (i in 2:11) {
+    lines(x=nExmpl,
+          y=metricsOA[metr, i, , ] %>% apply(2, mean),
+          col=col[colnames(metricsOA)[i]])
+ }
+metricsOA %>% apply(MARGIN = c(1,3,4), mean, na.rm=T) %>% .[metr,,] %>% apply(2, mean, na.rm=T)  %>% 
+lines(x = nExmpl,
+      y = ., lty=3, lwd=2, pch=19)
+}
+```
+
+
+
+```{r}
+# balanced accuracy
+i=1
+par(pty='s', mar=c(4,4,1,1)+.1)
+plot(metricsOA['balanced Accuracy', i, , ] %>% apply(2, mean, na.rm=T),
+     metricsTL['balanced Accuracy', i, , ] %>% apply(2, mean, na.rm=T),
+     type='l', xlim=c(0.5,1), ylim=c(0.5,1), col=col[colnames(metricsOA)[i]], las=1)
+abline(0,1)
+
+points(metricsOA['balanced Accuracy', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       metricsTL['balanced Accuracy', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       type='p', col=col[colnames(metricsOA)[i]], pch=c('\U25BA', '\U25A0'))
+
+for (i in 2:11) {
+lines(metricsOA['balanced Accuracy', i, , ] %>% apply(2, mean, na.rm=T), metricsTL['balanced Accuracy', i, , ] %>% apply(2, mean, na.rm=T), type='l', col=col[colnames(metricsOA)[i]])
+  
+points(metricsOA['balanced Accuracy', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       metricsTL['balanced Accuracy', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       type='p', col=col[colnames(metricsOA)[i]], pch=c('\U25BA', '\U25A0'))
+}
+
+# precision
+i=1
+par(pty='s', mar=c(4,4,1,1)+.1)
+plot(metricsOA['precision', i, , ] %>% apply(2, mean, na.rm=T),
+     metricsTL['precision', i, , ] %>% apply(2, mean, na.rm=T),
+     type='l', xlim=c(0,1), ylim=c(0,1), col=col[colnames(metricsOA)[i]], las=1)
+abline(0,1)
+points(metricsOA['precision', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       metricsTL['precision', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       type='p', col=col[colnames(metricsOA)[i]], pch=c('\U25BA', '\U25A0'))
+
+for (i in 2:11) {
+lines(metricsOA['precision', i, , ] %>% apply(2, mean, na.rm=T), metricsTL['precision', i, , ] %>% apply(2, mean, na.rm=T), type='l', col=col[colnames(metricsOA)[i]])
+
+points(metricsOA['precision', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       metricsTL['precision', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       type='p', col=col[colnames(metricsOA)[i]], pch=c('\U25BA', '\U25A0'))
+}
+
+# recall
+i=1
+par(pty='s', mar=c(4,4,1,1)+.1)
+plot(metricsOA['recall', i, , ] %>% apply(2, mean, na.rm=T),
+     metricsTL['recall', i, , ] %>% apply(2, mean, na.rm=T),
+     type='l', xlim=c(0,1), ylim=c(0,1), col=col[colnames(metricsOA)[i]], las=1)
+abline(0,1)
+
+points(metricsOA['recall', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       metricsTL['recall', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       type='p', col=col[colnames(metricsOA)[i]], pch=c('\U25BA', '\U25A0'))
+
+
+for (i in 2:11) {
+lines(metricsOA['recall', i, , ] %>% apply(2, mean, na.rm=T), metricsTL['recall', i, , ] %>% apply(2, mean, na.rm=T), type='l', col=col[colnames(metricsOA)[i]])
+  
+points(metricsOA['recall', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       metricsTL['recall', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       type='p', col=col[colnames(metricsOA)[i]], pch=c('\U25BA', '\U25A0'))
+}
+
+
+# f1
+i=1
+par(pty='s', mar=c(4,4,1,1)+.1)
+plot(metricsOA['F1', i, , ] %>% apply(2, mean, na.rm=T),
+     metricsTL['F1', i, , ] %>% apply(2, mean, na.rm=T),
+     type='l', xlim=c(0,1), ylim=c(0,1), col=col[colnames(metricsOA)[i]], las=1)
+abline(0,1)
+
+points(metricsOA['F1', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       metricsTL['F1', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       type='p', col=col[colnames(metricsOA)[i]], pch=c(17,15))
+
+
+for (i in 2:11) {
+lines(metricsOA['F1', i, , ] %>% apply(2, mean, na.rm=T),
+      metricsTL['F1', i, , ] %>% apply(2, mean, na.rm=T),
+      type='l', col=col[colnames(metricsOA)[i]])
+  
+points(metricsOA['F1', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       metricsTL['F1', i, , ] %>% apply(2, mean, na.rm=T) %>% .[c(1,15)],
+       type='p', col=col[colnames(metricsOA)[i]], pch=c(17,15))
+}
+
+```
+
+
+
+```{r fig.asp=1, fig.width=3}
+col <- sapply(metricsTL %>% colnames,
+              function(x) { as.vector(mAnnot.res1.1$DPcolor[mAnnot.res1.1$CellType == x][1])})
+
+
+plot(x=metricsTL['F1',,,1] %>% apply(1, mean), y=metricsTL['F1',,,15] %>% apply(1, mean), xlim=c(0.25,1), ylim=c(0.6,1), col=col, pch=19, las=1, xlab='A', ylab='C'); abline(h = .925, v=.5, lty=3)
+
+```
+

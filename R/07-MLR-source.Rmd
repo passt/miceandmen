@@ -1,0 +1,402 @@
+---
+title: "MLR"
+author: "PS STUMPF"
+date: "2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Requirements
+
+Before running this Markdown go back and run __04-pre-Processing-for-ML.Rmd__.
+
+
+```{r}
+# load 'm.kfold' containing previous indices of x-val test sets
+load(file = '../Models/Source/Source-xValSplits.RData')
+```
+
+
+# Train Multinomial Logistic Regression Classifier
+
+## Specify Model using function
+
+```{r}
+build_model <- function(in_shape) {
+  # define model
+  model <- keras_model_sequential() %>%
+    layer_dense(units = 14,
+                activation = "softmax",
+                input_shape = in_shape)
+  
+  # compile model
+  model %>% compile(
+    loss = "categorical_crossentropy",
+    optimizer = "rmsprop",
+    metrics = list("accuracy") )
+
+  # return model
+  model
+}
+```
+
+## Fit Model 
+
+```{r}
+ksplits = 5
+
+# Initialize empty lists
+modell = list()
+modell.predict = list()
+modell.predict.p = list()
+
+history = list()
+
+# Loop over k-folds
+for (fold in 1:ksplits) {
+  cat('Fold: ' ,fold, '\n')
+  
+  # extract indices for fold
+  ix.test.mm <- as.numeric(unlist(lapply(m.kfold, function(x){x[[fold]]})))
+  # extract training and test data for fold
+  x.train <- x.mouse[-ix.test.mm, ]
+  x.test  <- x.mouse[ ix.test.mm, ]
+  
+  # define and compile model
+  modell[[fold]] <- build_model(in_shape = ncol(x.train))
+  
+  # fit generator samples equally across all classes (5 examples)
+  gen <- function(){
+    ix.batch <- tapply(1:nrow(x.train), mIdent[-ix.test.mm], sample, 5) %>% unlist %>% as.vector
+    x.batch <- x.train[ix.batch,]
+    y.batch <- y.mouse.label[-ix.test.mm,][ix.batch,]
+    return(list(x.batch, y.batch))
+  }
+  
+  # train model
+  history[[fold]] <- 
+  modell[[fold]] %>% fit_generator(generator = gen,
+                                   steps_per_epoch = 42,
+                                   epochs = 10,
+                                   validation_data = list(x.test, y.mouse.label[ix.test.mm,]),
+                                   verbose = 1 )
+    
+  # print val acc
+  print(history[[fold]]$metrics %>% lapply(tail, 1))
+
+  # predict probabilities for softmax classification
+  modell.predict.p[[fold]] <- modell[[fold]] %>% predict(x.test)
+  
+  # Predict labels for validation data
+  x.test.class <- modell.predict.p[[fold]] %>% apply(1, function(x){which.max(x)})
+  modell.predict[[fold]] <-
+    list( predicted = factor(x.test.class, labels = y.mapping[,2]), 
+          true =      mIdent[ix.test.mm] ) 
+  rm(x.test.class)
+}
+```
+
+## Save Models
+
+```{r SaveModelToFile}
+# for (fold in 1:ksplits) {
+#   save_model_hdf5(object = modell[[fold]],
+#                   filepath = paste0('../Models/Source/MLR/Source_MLR_Model',fold, '.hdf5'),
+#                   include_optimizer = T,
+#                   overwrite = F)
+# }
+# # save indices of folds and model predictions calculated during k-fold xval.
+# save(m.kfold, modell.predict, modell.predict.p,
+#      file = '../RData/source-MLR-xval-splits.RData')
+```
+
+
+## Load Model
+
+```{r reLoadSavedModel}
+# load 'ix.test.mm' containing previous indices of x-val test sets
+load(file = '../Models/Source/Source-xValSplits.RData')
+
+modell <- list()
+modell.predict.p <- list()
+modell.predict.f <- list()
+modell.predict.c <- list()
+
+ksplits = 5
+
+for (fold in 1:ksplits) {
+  # Load pre-trained model
+  modell[[fold]] <- load_model_hdf5(filepath = paste0('../Models/Source/MLR/Source_MLR_Model', fold,'.hdf5'))
+  
+  # extract indices for fold
+  ix.test.mm <- as.numeric(unlist(lapply(m.kfold, function(x){x[[fold]]})))
+  # extract training and test data for fold
+  x.train <- x.mouse[-ix.test.mm, ]
+  x.test  <- x.mouse[ ix.test.mm, ]
+  
+  # predict probabilities for softmax classification
+  modell.predict.p[[fold]] <- modell[[fold]] %>% predict(x.test)
+  
+  # Predict labels for validation data
+  x.test.class <- modell.predict.p[[fold]] %>% apply(1, function(x){which.max(x)})
+  modell.predict[[fold]] <-
+    list( predicted = factor(x.test.class, labels = y.mapping[,2]), # colnames(y.mouse.label)), # 
+          true = mIdent[ix.test.mm] ) # mId.flat.name[ix.test.mm]) # 
+  rm(x.test.class)
+}
+
+```
+
+
+# Model performance
+
+Evaluation of model using mouse and human data. 
+
+## Intra-species (mouse) performance
+
+Visualize training performance using confusion matrix, chord diagram and feature plot (tSNE).
+
+### Confusion Matrix
+
+```{r AccuracyConfusion, fig.width=4, fig.asp=1}
+source('./other/precision_recall_balAcc.R')
+
+# Average Confusion Matrix (percent)
+cfm.freq <- modell.predict %>% lapply(table) %>%
+  lapply(function(cfm) { cfm %>% apply(1, function(cfm.row) { cfm.row / sum(cfm.row) } ) }) %>%
+  abind::abind(along=3) %>% apply(MARGIN = 1:2, mean)
+
+# Order of rows & columns
+cfm.order <- c("HSPCs", "Erythroblasts", "Monoblasts", "Monocytes", "Myeloblasts", "Myelocytes", "Neutrophils",
+               "Pro-B", "Pre-B", "T-NK", "Pericytes",  "Endothelial Cells",    "Megakaryocytes", "Basophils")
+cfm.freq <- cfm.freq[cfm.order, cfm.order]
+
+# Visualize average across k-fold cross-val as heatmap
+heatmap(cfm.freq, scale='none', Rowv=NA, Colv=NA, revC=TRUE,
+        asp=1, cexRow=1, cexCol=1, margins=c(10,8),
+        col=marray::maPalette(low='#efefef', high='#08306b', k = 100))
+
+# Overall Performance (percent)
+cat('Average performance:\n\n')
+modell.predict %>% lapply(table) %>% lapply(precall) %>% data.table::rbindlist() %>% apply(2, mean)
+
+
+cat('\n Avg: \t')
+modell.predict %>% lapply(table) %>% lapply(precall) %>% lapply(FUN=function(x){ x$'balanced Accuracy' %>% mean}) %>% unlist %>% mean
+cat('\n S.D.: \t')
+modell.predict %>% lapply(table) %>% lapply(precall) %>% lapply(FUN=function(x){ x$'balanced Accuracy' %>% mean}) %>% unlist %>% var %>% sqrt
+```
+### Localisation of misclassification
+
+```{r AdjacencyDictionaryLineagetree}
+adjDict <- 
+list('HSPCs'             = c('HSPCs', 'Erythroblasts', 'Monoblasts', 'Myeloblasts',
+                             'Pro-B', 'T-NK', 'Megakaryocytes', 'Basophils'),
+     'Erythroblasts'     = c('Erythroblasts', 'HSPCs'),
+     'Monoblasts'        = c('Monoblasts','HSPCs', 'Monocytes'),
+     'Monocytes'         = c('Monocytes','Monoblasts'),
+     'Myeloblasts'       = c('Myeloblasts','HSPCs', 'Myelocytes'),
+     'Myelocytes'        = c('Myelocytes','Myeloblasts', 'Neutrophils'),
+     'Neutrophils'       = c('Neutrophils','Myelocytes'),
+     'Pro-B'             = c('Pro-B','HSPCs', 'Pre-B'),
+     'Pre-B'             = c('Pre-B','Pro-B'),
+     'T-NK'              = c('T-NK','HSPCs'),
+     'Pericytes'         = c('Pericytes'),
+     'Endothelial Cells' = c('Endothelial Cells'),
+     'Megakaryocytes'    = c('Megakaryocytes','HSPCs'),
+     'Basophils'         = c('Basophils','HSPCs'))
+```
+
+
+
+```{r TruePos}
+tp   <- modell.predict %>% lapply(function(x){ x$true == x$predicted }) %>% unlist
+tp.c <- modell.predict.c %>% lapply(function(x){ x$true == x$predicted }) %>% unlist
+tp.or <- 1:5 %>% lapply(FUN=function(ix) { lapply(m.kfold, FUN=function(x){ x[[ix]] }) }) %>%
+        unlist %>% as.numeric %>% order
+
+tp1removed <- modell.predict %>% lapply(function(x){  lapply(1:length(x$predicted), function(i) { as.vector(x$predicted[i]) %in% as.vector(unlist(adjDict[as.vector(x$true[i])])) }) %>% unlist }) %>% unlist
+
+tp <- tp[tp.or]
+tp.c <- tp.c[tp.or]
+tp1removed <- tp1removed[tp.or]
+```
+
+
+
+```{r TruePosPlot, fig.asp=1, fig.width=3}
+# # plot true pos distribution
+par(pty='s', mar=c(4,4,1,1)+0.1, pty='s')
+plot(mBMMNC@dr$tsne@cell.embeddings[tp, ], pch=19, cex=.25, col='grey', las=1,
+     main='misclassification', xlab="Dimension 1", ylab="Dimension 2",
+     xaxp=c(-40,40,2), yaxp=c(-40,40,2))
+points(mBMMNC@dr$tsne@cell.embeddings[!tp &  tp1removed,], pch=19, cex=.1, col='magenta')    # cell type
+points(mBMMNC@dr$tsne@cell.embeddings[!tp & !tp1removed,], pch=19, cex=.1, col='purple')  # both
+```
+
+### Frequency table misclassification
+
+```{r}
+mfold.fac <- rep(0, ncol(x.mouse))
+for (fold in 1:ksplits) { mfold.fac[as.numeric(unlist(lapply(m.kfold, function(x){x[[fold]]})))]<-fold }
+
+cat('% proximal: ',
+    signif(100*mean(table(!tp &  tp1removed, mfold.fac)['TRUE',] / table(mfold.fac)),2),
+    '±',
+    signif(100*sqrt(var(table(!tp &  tp1removed, mfold.fac)['TRUE',] / table(mfold.fac))),2),
+    's.d.\n')
+cat('%   distal: ',
+    signif(100*mean(table(!tp & !tp1removed, mfold.fac)['TRUE',] / table(mfold.fac)),2),
+    '±',
+    signif(100*sqrt(var(table(!tp & !tp1removed, mfold.fac)['TRUE',] / table(mfold.fac))),2),
+    's.d.\n')
+
+```
+
+
+```{r}
+# Proximal
+## Mean 
+100*(table(!tp & tp1removed, mIdent, mfold.fac)[,'HSPCs',] /
+   table(mIdent, mfold.fac)['HSPCs',])['TRUE',] %>% mean
+## Standard deviation
+100*(table(!tp & tp1removed, mIdent, mfold.fac)[,'HSPCs',] /
+    table(mIdent, mfold.fac)['HSPCs',])['TRUE',] %>% var %>% sqrt
+
+# Distal
+## Mean 
+100*(table(!tp & !tp1removed, mIdent, mfold.fac)[,'HSPCs',] /
+   table(mIdent, mfold.fac)['HSPCs',])['TRUE',] %>% mean
+## Standard deviation
+100*(table(!tp & !tp1removed, mIdent, mfold.fac)[,'HSPCs',] /
+    table(mIdent, mfold.fac)['HSPCs',])['TRUE',] %>% var %>% sqrt
+
+```
+
+
+## Inter-species (human) performance
+
+Evaluate transfer learning.
+
+Predict human labels (and probabilities) using model trained exclusively on mouse data.
+
+```{r PredictHumanLabels}
+# Predict labels for human data
+modell.predict.human <- modell %>%
+                        lapply(function(model) {
+                          model %>% predict(x.human) %>% apply(1, function(x){y.mapping[which.max(x),2]})})
+
+# Establish consensus of predictions across all models (most frequent class - *MANAGE TIES*)
+modell.predict.human.consensus <- modell.predict.human %>%
+                                  abind::abind(along=2) %>%
+                                  apply(MARGIN = 1, function(labels) {
+                                    w <- labels %>% table() %>% sort(decreasing=T)
+                                    if ((max(w) >= 3) | (max(w)==2 & length(w) == 4)){ head(w, 1) %>% names
+                                      } else{ NA }
+                                    } ) 
+
+# Add as metadata
+hBMMNC@meta.data$NN_predict.consensus <- modell.predict.human.consensus
+```
+
+### Performance metrics (confusion, balanced Acc, precision, recall)
+
+```{r AccuracyConfusion, fig.width=4, fig.asp=1}
+# calculate frequency table
+cfm.freq.human.consensus <- table(list(predicted=modell.predict.human.consensus, true=hIdent),
+                                  useNA = 'always')
+
+# re-order
+cfm.freq.human.consensus <- rbind(cfm.freq.human.consensus[cfm.order, cfm.order[1:11]],
+                                  cfm.freq.human.consensus[15,        cfm.order[1:11]])
+
+# Consensus Performance
+cat('consensus performance: \n\n')
+    precall(cfm.freq.human.consensus) %>% lapply(mean)
+
+# Consensus Confusion Matrix (percent)
+cfm.freq.human.consensus.norm <- normalizeMat(cfm.freq.human.consensus, 2)
+# adapt human labels
+colnames(cfm.freq.human.consensus.norm)[8:9] <- c('Pro-/Pre-B', 'Immature B')
+rownames(cfm.freq.human.consensus.norm)[15] <- c('no agreement')
+
+# Visualize consensus across k-fold cross-val as heatmap
+heatmap(t(cfm.freq.human.consensus.norm),
+        scale = 'none', Rowv = NA, Colv = NA, revC = TRUE,
+        asp = 1, cexRow = 1, cexCol = 1, margins = c(10,8),
+        col = marray::maPalette(low = '#efefef', high = '#004529', k = 100))
+
+```
+
+
+### Localisation of misclassification
+
+```{r TruePosPlot, fig.asp=1, fig.width=3}
+# Not represented in human unsupervised clustering:
+hnre <- modell.predict.human.consensus %in% c('Endothelial Cells', 'Megakaryocytes', 'Basophils')
+# Misclassification
+htp <- (modell.predict.human.consensus == hIdent)
+hnag <- is.na(modell.predict.human.consensus)
+
+
+htp1removed <- 
+lapply(1:length(hIdent), function(i) {
+  as.vector(modell.predict.human.consensus[i]) %in% as.vector(unlist(adjDict[as.vector(hIdent[i])])) 
+}) %>% unlist
+
+par(pty='s', mar=c(4,4,1,1)+0.1, pty='s')
+plot(hBMMNC@dr$tsne@cell.embeddings[htp & !hnag | hnre, ], pch=19, cex=.25, col='grey', las=1,
+     main='misclassification', xlab="Dimension 1", ylab="Dimension 2",
+     xaxp=c(-40,40,2), yaxp=c(-40,40,2))
+points(hBMMNC@dr$tsne@cell.embeddings[!htp &  htp1removed & !hnre,], pch=19, cex=.1, col='magenta') # cell type
+points(hBMMNC@dr$tsne@cell.embeddings[!htp & !htp1removed & !hnre,], pch=19, cex=.1, col='purple') # branch
+points(hBMMNC@dr$tsne@cell.embeddings[ hnag & !hnre,], pch=19, cex=.1, col='cyan')  # no agreement
+```
+
+```{r}
+# Overall
+mean(table(!htp &  htp1removed & !hnre, hIdent)['TRUE',] /  table(hIdent)) #proximal
+mean(table(!htp & !htp1removed & !hnre, hIdent)['TRUE',] /  table(hIdent)) #distal
+```
+
+
+```{r}
+celltype = 'HSPCs'
+# human celltype Consensus proximal
+(table(!htp &  htp1removed & !hnre, hIdent)['TRUE', celltype] / table(hIdent)[celltype]) *100
+# human celltype Consensus distal
+(table(!htp & !htp1removed & !hnre, hIdent)['TRUE', celltype] / table(hIdent)[celltype]) *100
+```
+
+
+# Intersect Sensitivity
+
+Compare ranked list of weights (of features) in first layer vs ranked list of MI from ANN.
+
+```{r}
+load('../RData/Source-ANN-MI.RData')
+colnames(mMI) <- y.mapping[,2]
+
+MW <- modell %>% lapply(FUN=function(x){ keras::get_weights(x)[[1]]}) %>% as.array() %>% abind::abind(along = 3)
+dimnames(MW) <- list(gene = x.mouse.names, celltype = y.mapping[,2], fold=1:5)
+
+PercDistr <-
+  1:14 %>% lapply( FUN=function(i){
+    100* ((x.mouse.names[MW[,i,1] %>% order(decreasing = F)] %in% (mMI[,i] %>% as.vector)) %>% which) / 4372
+  })
+
+names(PercDistr) <- y.mapping[,2]
+
+par(pty='s', mar=c(4,4,1,1)+.1)
+PercDistr[cfm.order[14:1]] %>% 
+  beanplot::beanplot(cutmin=0, cutmax = 100, horizontal = T, las=1,
+                     what = c(F,T,F,F), overallline = 'median',
+                     xlab='Percentile', border = F )
+abline(v=c(5,95), lty=3)
+```
+
+

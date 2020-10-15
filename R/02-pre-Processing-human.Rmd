@@ -1,0 +1,138 @@
+---
+title: "DropSeq HUMAN bone marrow mononuclear cells"
+author: "PS STUMPF"
+date: "December 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load Packages
+library(Seurat) # Single-cell RNA-seq analysis package by Satija group
+```
+
+# Pre-processing
+
+```{r ReadData}
+# Read Data
+hBMMNC.raw <- read.table('../../Aligned_MultiMapper/Human_Merged/merged.DGE.txt.gz', header=T, sep="\t", row.names = 1)
+hBMMNC.meta <- as.data.frame(t(sapply(colnames(hBMMNC.raw), function(x) {strsplit(x,"_")[[1]][1:2]})))
+colnames(hBMMNC.meta) <- c("Specimen", "Population")
+```
+
+```{r CreateSeurat}
+# Create Seurat object
+hBMMNC <- CreateSeuratObject(hBMMNC.raw, names.field = 1:2, names.delim = "_",
+                             meta.data = hBMMNC.meta,project = "hBM-MNC",
+                             min.genes = 200, min.cells = 3)
+hBMMNC # print summary
+```
+
+
+```{r results='hide', fig.height=4, fig.width=8}
+# Establish percentage of mitochondrial genes per cell
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = hBMMNC@data), value = TRUE)
+percent.mito <- Matrix::colSums(hBMMNC@raw.data[mito.genes, ]) / Matrix::colSums(hBMMNC@raw.data)
+
+# AddMetaData adds columns to object@meta.data, and is a great place to stash QC stats
+hBMMNC <- AddMetaData(object = hBMMNC, metadata = percent.mito, col.name = "percent.mito")
+VlnPlot(object = hBMMNC, features.plot = c("nGene"), nCol = 1)
+VlnPlot(object = hBMMNC, features.plot = c("nUMI"), nCol = 1)
+VlnPlot(object = hBMMNC, features.plot = c("percent.mito"), nCol = 1)
+
+lim.high.nGene = 6.3e3
+lim.high.nUMI = 4e4
+lim.high.pMito = 0.08
+
+# Visualise results
+par(mfrow = c(1, 2), las=1, pty='s')
+
+GenePlot(object = hBMMNC, gene1 = "nUMI", gene2 = "percent.mito")
+  abline(h=lim.high.pMito, col='magenta')
+  text(5e4, lim.high.pMito, labels=lim.high.pMito, col='magenta', cex=.75, pos=3)
+  
+GenePlot(object = hBMMNC, gene1 = "nUMI", gene2 = "nGene")
+  rect(100, 100, lim.high.nUMI, lim.high.nGene, border='magenta')
+  text(lim.high.nUMI, lim.high.nGene, '(2.8e4, 5.5e3)', col='magenta', cex=.75, pos=4)
+```
+
+```{r filterResults, fig.height=4, fig.width=8}
+# Filter based on gene content
+hBMMNC
+hBMMNC <- FilterCells(object = hBMMNC, subset.names = c("nUMI", "percent.mito"), low.thresholds = c(200, -Inf), high.thresholds = c(lim.high.nUMI, lim.high.pMito))
+VlnPlot(object = hBMMNC, features.plot = c("percent.mito"))
+hBMMNC
+```
+
+
+```{r removeMitoGenes}
+hBMMNC <- CreateSeuratObject(hBMMNC@data[!grepl(pattern = '^MT-', x = rownames(hBMMNC@data)),],
+                             names.field = 1:2, names.delim = "_", meta.data = hBMMNC@meta.data,
+                             project = "hBM-MNC", min.genes = 200, min.cells = 3)
+hBMMNC
+```
+
+
+```{r normalize, results='hide'}
+hBMMNC <- NormalizeData(object = hBMMNC, normalization.method = "LogNormalize", scale.factor = 1e4)
+```
+
+
+```{r var_genes, fig.height=4, fig.width=4, results='hide'}
+hBMMNC <- FindVariableGenes(object = hBMMNC, mean.function = ExpMean, dispersion.function = LogVMR, x.low.cutoff = 0.0125, x.high.cutoff = 4, y.cutoff = 0.5)
+```
+
+```{r regress, results='hide'}
+hBMMNC <- ScaleData(object = hBMMNC, vars.to.regress = c("nUMI"), do.par = TRUE, num.cores=4)
+```
+
+```{r}
+rm(hBMMNC.raw, hBMMNC.meta, mito.genes, percent.mito, lim.high.nGene, lim.high.nUMI, lim.high.pMito)
+```
+
+
+
+
+## Dimensionality reduction
+
+```{r pca}
+hBMMNC <- RunPCA(object = hBMMNC, pc.genes = hBMMNC@var.genes, do.print = FALSE, pcs.compute = 32)
+```
+
+```{r pca_viz, fig.asp=1}
+# Examine and visualize PCA results a few different ways
+PrintPCA(object = hBMMNC, pcs.print = 1:3, genes.print = 5, use.full = FALSE)
+VizPCA(object = hBMMNC, pcs.use =1:4)
+PCAPlot(object = hBMMNC, dim.1 = 1, dim.2 = 2)
+PCAPlot(object = hBMMNC, dim.1 = 2, dim.2 = 3)
+PCElbowPlot(object = hBMMNC, num.pc = 32)
+
+hBMMNC <- ProjectPCA(object = hBMMNC, do.print = FALSE)
+```
+
+
+```{r cluster}
+for (i in (1:40)/10) {
+hBMMNC <- FindClusters(object = hBMMNC, reduction.type = "pca", dims.use = 1:10, resolution = i,
+                       k.param=30, save.SNN = TRUE, print.output = FALSE)
+}
+```
+
+```{r DimensionalityReductionTSNE}
+# initialize TSNE slots in mBMMNC by running built in function
+hBMMNC <- RunTSNE(object = hBMMNC, dims.use = 1:10, verbose=F, seed.use = NULL)
+
+# run more iterations fast - Seurat somehow gets stuck
+hBMMNC.tsne <- Rtsne::Rtsne(hBMMNC@dr$pca@cell.embeddings[,1:10], pca = FALSE, perplexity = 30, max_iter = 5000, verbose = F)
+
+# overwrite initialized slots
+hBMMNC@dr$tsne@cell.embeddings[,1:2] <- as.matrix(hBMMNC.tsne$Y) #rm(hBMMNC.tsne)
+```
+
+# Save
+
+```{r}
+save(hBMMNC, file='../RData/humanBMMNC-Seurat.RData')
+```

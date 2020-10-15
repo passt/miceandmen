@@ -1,0 +1,136 @@
+---
+title: "preProcessing for ML"
+author: "PS Stumpf"
+date: "09 December 2017"
+output: html_document
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+reticulate::use_condaenv(condaenv = 'kerasRTF', conda = '/Users/stumpf/opt/miniconda3/bin/conda', required = T)
+require(keras)
+require(Seurat)
+
+```
+
+
+# Requirements
+
+Run once __01-pre-Processing-mouse.Rmd__, __02-pre-Processing-human.Rmd__, and __03-EnsemblCommonFeatureSpace.Rmd__.
+
+Install keras for R (https://tensorflow.rstudio.com/).
+
+
+# Load processed data
+
+```{r Load processed data}
+# mouse Seurat object
+load(file='../RData/mouseBMMNC-Seurat.RData')
+# mouse manual cluster annotation
+mAnnot.res1.1 <- read.table('../Metadata/mBMMNC_Annotation_res1.1.txt', sep='\t', header=T)
+mIdent <- factor(mBMMNC@meta.data$res.1.1)#, ordered = T)
+levels(mIdent) <- mAnnot.res1.1$CellType
+
+
+# human Seurat object
+load('../RData/humanBMMNC-Seurat.RData')
+# human manual cluster annotation
+hAnnot.res1.1 <- read.table('../Metadata/hBMMNC_Annotation_res1.1.txt', sep='\t', header=T)
+hIdent <- factor(hBMMNC@meta.data$res.1.1)#, ordered = T)
+levels(hIdent) <- hAnnot.res1.1$CellType[1:16]
+
+# ENSEMBL feature map
+load('../RData/EnsemblFeatureMap-MM-HS.RData')
+
+# Identify Paralogues (one-to-many OR many-to-one mapping)
+FeatureMap.mm$Paralogue <- duplicated(FeatureMap.mm$ix_DGE_mm) | duplicated(FeatureMap.mm$ix_DGE_hs)
+FeatureMap.hs$Paralogue <- duplicated(FeatureMap.hs$ix_DGE_mm) | duplicated(FeatureMap.hs$ix_DGE_hs)
+```
+
+```{r DataOptions}
+# # Options # #
+
+# Use union of variable genes?
+nn.trainOnVariableGeneUnion = TRUE
+
+# binarise data?
+nn.trainbinary = TRUE
+```
+
+
+# Align feature space
+
+... using ENSEMBL annotation of gene-orthologues
+
+```{r prepMouseData, echo=F, eval=T}
+# prep mouse data #
+
+# extract class label (numeric)
+y.mouse.label <- to_categorical(as.numeric(mIdent)-1, 14)
+
+nn.class.weights <- as.list(sum(colSums(y.mouse.label))/colSums(y.mouse.label) /
+                              max(sum(colSums(y.mouse.label))/colSums(y.mouse.label)))
+names(nn.class.weights) <- 0:13
+
+# label mapping:
+y.mapping <- unique(cbind(as.numeric(mIdent)-1, as.vector(mIdent)), MARGIN = 1)[order(as.numeric(unique(cbind(as.numeric(mIdent)-1, as.vector(mIdent)), MARGIN = 1)[,1])),]
+
+# extract data
+if (nn.trainbinary) {
+  cat('Extracting binarised data... \n')
+  # binarise training data
+  x.mouse <- 1*t(mBMMNC@raw.data[as.numeric(FeatureMap.mm$ix_DGE_mm),] > 0); dim(x.mouse)
+} else {
+  # scaled training data
+  cat('Extracting Scaled data... \n')
+  x.mouse <- t(mBMMNC@scale.data[as.numeric(FeatureMap.mm$ix_DGE_mm),]); dim(x.mouse)
+  # re-scale to range [0,1]
+  # x.mouse <- apply(x.mouse, 2, function(x) { (x - min(x)) / max(x - min(x))})
+}
+
+# subset to genes that are highly variable (take from Seurat - union of mouse and man)
+if(nn.trainOnVariableGeneUnion){
+  cat('Subsetting to union of variable genes... \n')
+  mgiSymbol_hsVarGenes <- FeatureMap.mm$mgi_symbol[FeatureMap.mm$hsapiens_homolog_associated_gene_name
+                                                   %in% hBMMNC@var.genes]
+  genesToConsider <- union(mgiSymbol_hsVarGenes, mBMMNC@var.genes); rm(mgiSymbol_hsVarGenes)
+  FeatureMap.mm$UseForTrainingNN <- colnames(x.mouse) %in% genesToConsider; rm(genesToConsider)
+  # logical vector of genes to use
+   FeatureSubset <- FeatureMap.mm$UseForTrainingNN &
+                        !(duplicated(FeatureMap.mm$mgi_symbol) |
+                            duplicated(FeatureMap.mm$hsapiens_homolog_associated_gene_name))
+  x.mouse <- x.mouse[ , FeatureSubset]
+  print(dim(x.mouse))
+  
+  # save column names to variable
+  x.mouse.names <- colnames(x.mouse)
+  x.mouse.entrez <- FeatureMap.mm$ensembl_gene_id[FeatureSubset]
+}
+
+cat('Reshaping array to conform with input layer... \n')
+x.mouse <- array_reshape(x.mouse, c(nrow(x.mouse),ncol(x.mouse))); dim(x.mouse)
+```
+
+```{r PrepHumanData, echo=F, eval=T}
+# extract data
+if (nn.trainbinary) {
+  cat('Extracting binarised human data... \n')
+  x.human <- 1 * t(hBMMNC@raw.data[as.numeric(FeatureMap.mm$ix_DGE_hs), ] > 0); dim(x.human)
+} else {
+  cat('Extracting scaled human data... \n')
+  x.human <- t(hBMMNC@scale.data[as.numeric(FeatureMap.mm$ix_DGE_hs), ]); dim(x.human)
+}
+
+# subset data to contain only genes used for training
+cat('Subsetting to union of variable genes... \n')
+if (nn.trainOnVariableGeneUnion) x.human <- x.human[,FeatureMap.mm$UseForTrainingNN &
+                                                      !(duplicated(FeatureMap.mm$mgi_symbol) |
+                                                          duplicated(FeatureMap.mm$hsapiens_homolog_associated_gene_name))]
+dim(x.human)
+
+# reshape to correct input
+cat('Reshaping data to conform with input layer... \n')
+x.human <- array_reshape(x.human, c(nrow(x.human),ncol(x.human))); dim(x.human)
+```
+
+

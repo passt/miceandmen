@@ -1,0 +1,27 @@
+Cluster	CellType	Dev_Branch	DPcolor
+0	Myeloblasts	Granulopoieisis	'#7570b3'
+1	Erythroblasts	Erythropoieisis	'#b02f16'
+10	Neutrophils	Granulopoieisis	'#5643ad'
+11	Erythroblasts	Erythropoieisis	'#df583c'
+12	Monoblasts	Granulopoieisis	'#984ea3'
+13	Pro-B	Lymphopoieisis	'#a6761d'
+14	HSPCs	Hematopoieisis	'#1b9e77'
+15	Pericytes	Vasculature	'#e7298a'
+2	Erythroblasts	Erythropoieisis	'#c03d23'
+3	Myelocytes	Granulopoieisis	'#6655a1'
+4	Monocytes	Granulopoieisis	'#6f277b'
+5	Erythroblasts	Erythropoieisis	'#a0220a'
+6	Pre-B	Lymphopoieisis	'#8b4f4c'
+7	Myelocytes	Granulopoieisis	'#6e62aa'
+8	T-NK	Lymphopoieisis	'#e6ab02'
+9	Erythroblasts	Erythropoieisis	'#cf4a2f'
+NA	Endothelial Cells	Angiogenesis	'#666666'
+NA	Basophils	Granulopoieisis	'#1f78b4'
+NA	Megakaryocytes	Megakaryopoieisis	'#66a61e'
+
+
+
+
+
+
+

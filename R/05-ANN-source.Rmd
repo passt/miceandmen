@@ -1,0 +1,529 @@
+---
+title: "ANN source"
+author: "PS Stumpf"
+date: "2017-2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(warnPartialMatchArgs = FALSE)
+
+library(keras)
+library(Seurat)
+```
+
+# Requirements
+
+Before running this Markdown go back and run __04-pre-Processing-for-ML.Rmd__.
+
+
+# Model training
+
+## K-fold cross-validation
+
+Sequentially initialize and train model using 5-fold cross-validation
+
+```{r PartitionDataForXVal}
+# number of partitions for k-fold cross validation
+ksplits=5
+
+# set up 5-fold cross validation (smallest cluster has 50 examples -> 10 per CV)
+kfold <- function(x, ksplits) {
+  # set up k-fold cross validation
+  n = length(x)
+  x = x[sample(1:n, size = n, replace=F)] # shuffle indices
+  split(x, cut(1:n, breaks = ksplits, labels=1:ksplits)) # split vector into folds
+}
+
+# split indices by population and split kfold
+m.kfold <- lapply(split(1:length(mIdent), mIdent), kfold, ksplits=ksplits)
+h.kfold <- lapply(split(1:length(hIdent), hIdent), kfold, ksplits=ksplits)
+
+# example: lapply(m.kfold, function(x){x[[k]]}) # for k-th fold
+```
+
+## Fit k models
+
+```{r TrainNNxVal}
+# Initialize empty lists
+modell = list()
+modell.predict = list()
+modell.predict.p = list()
+
+history = list()
+
+# Loop over k-folds
+for (fold in 1:ksplits) {
+  cat('Fold: ' ,fold, '\n')
+  # extract indices for fold
+  ix.test.mm <- as.numeric(unlist(lapply(m.kfold, function(x){x[[fold]]})))
+  # extract training and test data for fold
+  x.train <- x.mouse[-ix.test.mm, ]
+  x.test  <- x.mouse[ ix.test.mm, ]
+
+  # FUNCTIONAL API (DOES allow dropout in input)
+  # Define the model
+  inputs <- layer_input(shape = ncol(x.train))
+  predictions <- inputs %>%
+                 layer_dropout(rate = 0.5)                                %>% # Dropout
+                 layer_dense(units = 16, activation = 'relu',
+                           kernel_regularizer = regularizer_l1(l=0.001))  %>% # Dense (16)
+                 layer_dense(units = 14, activation = 'softmax')              # Softmax (14)
+  # Put pieces together
+  modell[[fold]] <- keras_model(inputs = inputs, outputs = predictions)
+  
+  # Compile the model
+  modell[[fold]] %>% compile(
+    loss = 'categorical_crossentropy',
+    optimizer = optimizer_rmsprop(),
+    metrics = c('accuracy')
+  )
+  
+  # fit generator samples euqally across all classes (5 examples)
+  gen <- function(){
+    ix.batch <- tapply(1:nrow(x.train), mIdent[-ix.test.mm], sample, 5) %>% unlist %>% as.vector
+    x.batch <- x.train[ix.batch,]
+    y.batch <- y.mouse.label[-ix.test.mm,][ix.batch,]
+    return(list(x.batch, y.batch))
+  }
+  
+  # Train the model
+  # history[[as.character(n)]][[fold]] <- 
+  history[[fold]] <- 
+  modell[[fold]] %>% fit_generator(
+    generator = gen, #(x.train, y.mouse.label[-ix.test.mm,]),
+    # x.train, y.mouse.label[-ix.test.mm,],
+    # batch_size = 256,
+    steps_per_epoch = 42, # Smallest class has 40 examples per x-val.
+                          # At 42 steps per epoch, each example will be used ~5 times per epoch
+    epochs = 21, 
+    validation_data = list(x.test, y.mouse.label[ix.test.mm,]),
+    verbose = 0
+    # class_weight = nn.class.weights
+    )
+  
+  # print val acc
+  print(history[[fold]]$metrics %>% lapply(tail, 1))
+
+  # predict probabilities for softmax classification
+  modell.predict.p[[fold]] <- modell[[fold]] %>% predict(x.test)
+  
+  # Predict labels for validation data
+  x.test.class <- modell.predict.p[[fold]] %>% apply(1, function(x){which.max(x)})
+  modell.predict[[fold]] <-
+    list( predicted = factor(x.test.class, labels = y.mapping[,2]), # colnames(y.mouse.label)), # 
+          true = mIdent[ix.test.mm] ) # mId.flat.name[ix.test.mm]) # 
+  rm(x.test.class)
+  
+}
+# }
+```
+
+
+## Save Models
+
+```{r SaveModelToFile}
+# for (fold in 1:ksplits) {
+#   save_model_hdf5(object = modell[[fold]],
+#                   filepath = paste0('../Models/Source/ANN/Source_ANN_Model', fold, '.hdf5'),
+#                   include_optimizer = T,
+#                   overwrite = F)
+# }
+# # save indices of folds and model predictions calculated during k-fold xval.
+# save(m.kfold, modell.predict, modell.predict.p,
+#      file = '../Models/Source/ANN/Source_ANN_xValSplits.RData')
+```
+
+## Load Model
+
+```{r reLoadSavedModel}
+# load 'ix.test.mm' containing previous indices of x-val test sets
+load(file = '../Models/Source/ANN/Source_ANN_xValSplits.RData')
+
+modell <- list()
+modell.predict.p <- list()
+modell.predict.f <- list()
+modell.predict.c <- list()
+
+ksplits = 5
+
+for (fold in 1:ksplits) {
+  # Load pre-trained model
+  modell[[fold]] <- load_model_hdf5(filepath = paste0('../Models/Source/ANN/Source_ANN_Model', fold,'.hdf5'))
+  
+  # extract indices for fold
+  ix.test.mm <- as.numeric(unlist(lapply(m.kfold, function(x){x[[fold]]})))
+  # extract training and test data for fold
+  x.train <- x.mouse[-ix.test.mm, ]
+  x.test  <- x.mouse[ ix.test.mm, ]
+  
+  # predict probabilities for softmax classification
+  modell.predict.p[[fold]] <- modell[[fold]] %>% predict(x.test)
+  
+  # Predict labels for validation data
+  x.test.class <- modell.predict.p[[fold]] %>% apply(1, function(x){which.max(x)})
+  modell.predict[[fold]] <-
+    list( predicted = factor(x.test.class, labels = y.mapping[,2]), # colnames(y.mouse.label)), # 
+          true = mIdent[ix.test.mm] ) # mId.flat.name[ix.test.mm]) # 
+  rm(x.test.class)
+}
+
+```
+
+# Model performance
+
+Evaluation of model using mouse and human data. 
+
+## Intra-species (mouse) performance
+
+Visualize training performance using confusion matrix, chord diagram and feature plot (tSNE).
+
+### Confusion Matrix
+
+```{r AccuracyConfusion, fig.width=4, fig.asp=1}
+source('./other/precision_recall_balAcc.R')
+
+# Average Confusion Matrix (percent)
+cfm.freq <- modell.predict %>% lapply(table) %>%
+  lapply(function(cfm) { cfm %>% apply(1, function(cfm.row) { cfm.row / sum(cfm.row) } ) }) %>%
+  abind::abind(along=3) %>% apply(MARGIN = 1:2, mean)
+
+# Order of rows & columns
+cfm.order <- c("HSPCs", "Erythroblasts", "Monoblasts", "Monocytes", "Myeloblasts", "Myelocytes", "Neutrophils",
+               "Pro-B", "Pre-B", "T-NK", "Pericytes",  "Endothelial Cells",    "Megakaryocytes", "Basophils")
+cfm.freq <- cfm.freq[cfm.order, cfm.order]
+
+# Visualize average across k-fold cross-val as heatmap
+heatmap(cfm.freq, scale='none', Rowv=NA, Colv=NA, revC=TRUE,
+        asp=1, cexRow=1, cexCol=1, margins=c(10,8),
+        col=marray::maPalette(low='#efefef', high='#08306b', k = 100))
+
+# Overall Performance (percent)
+cat('Average performance:\n\n')
+modell.predict %>% lapply(table) %>% lapply(precall) %>% data.table::rbindlist() %>% apply(2, mean)
+
+
+```
+
+```{r ConfusionColorBar, fig.width=3, fig.asp=1}
+par(mar=c(7, 3, 7, 3))
+image(as.matrix(1:100), col=marray::maPalette(low='#efefef', high='#08306b', k = 100), axes=F, asp=1); box()
+axis(1, at = c(0,1), labels = c('0','1'), line = 0, las=1)
+mtext(side = 3, text = 'Fraction', line = 0.5)
+
+# '#3f007d'
+
+par(mar=c(7, 3, 7, 3))
+image(as.matrix(1:100), col=marray::maPalette(low='grey', high='blue', k = 100), axes=F, asp=1); box()
+axis(1, at = c(0,1), labels = c('0','1'), line = 0, las=1)
+mtext(side = 3, text = 'Softmax Entropy', line = 0.5)
+
+
+par(mar=c(7, 3, 7, 3))
+image(as.matrix(1:100), col=marray::maPalette(low='blue', mid='white', high='red', k = 50), axes=F, asp=1); box()
+axis(1, at = c(0,1), labels = c('-1','1'), line = 0, las=1)
+mtext(side = 3, text = 'Correlation', line = 0.5)
+
+
+par(mar=c(7, 3, 7, 3))
+image(as.matrix(1:100), col=marray::maPalette(low='white', high='goldenrod', k = 50), axes=F, asp=1); box()
+axis(1, at = c(0,1), labels = c('0','1'), line = 0, las=1)
+mtext(side = 3, text = 'norm. MI', line = 0.5)
+
+```
+
+### Localisation of misclassification
+
+```{r AdjacencyDictionaryLineagetree}
+adjDict <- 
+list('HSPCs'             = c('HSPCs', 'Erythroblasts', 'Monoblasts', 'Myeloblasts',
+                             'Pro-B', 'T-NK', 'Megakaryocytes', 'Basophils'),
+     'Erythroblasts'     = c('Erythroblasts', 'HSPCs'),
+     'Monoblasts'        = c('Monoblasts','HSPCs', 'Monocytes'),
+     'Monocytes'         = c('Monocytes','Monoblasts'),
+     'Myeloblasts'       = c('Myeloblasts','HSPCs', 'Myelocytes'),
+     'Myelocytes'        = c('Myelocytes','Myeloblasts', 'Neutrophils'),
+     'Neutrophils'       = c('Neutrophils','Myelocytes'),
+     'Pro-B'             = c('Pro-B','HSPCs', 'Pre-B'),
+     'Pre-B'             = c('Pre-B','Pro-B'),
+     'T-NK'              = c('T-NK','HSPCs'),
+     'Pericytes'         = c('Pericytes'),
+     'Endothelial Cells' = c('Endothelial Cells'),
+     'Megakaryocytes'    = c('Megakaryocytes','HSPCs'),
+     'Basophils'         = c('Basophils','HSPCs'))
+```
+
+
+
+```{r TruePos}
+tp   <- modell.predict %>% lapply(function(x){ x$true == x$predicted }) %>% unlist
+tp.c <- modell.predict.c %>% lapply(function(x){ x$true == x$predicted }) %>% unlist
+tp.or <- 1:5 %>% lapply(FUN=function(ix) { lapply(m.kfold, FUN=function(x){ x[[ix]] }) }) %>%
+        unlist %>% as.numeric %>% order
+
+tp1removed <- modell.predict %>% lapply(function(x){  lapply(1:length(x$predicted), function(i) { as.vector(x$predicted[i]) %in% as.vector(unlist(adjDict[as.vector(x$true[i])])) }) %>% unlist }) %>% unlist
+
+tp <- tp[tp.or]
+tp.c <- tp.c[tp.or]
+tp1removed <- tp1removed[tp.or]
+```
+
+
+
+```{r TruePosPlot, fig.asp=1, fig.width=3}
+par(pty='s', mar=c(4,4,1,1)+0.1, pty='s')
+plot(mBMMNC@dr$tsne@cell.embeddings[tp, ], pch=19, cex=.25, col='grey', las=1,
+     main='misclassification', xlab="Dimension 1", ylab="Dimension 2",
+     xaxp=c(-40,40,2), yaxp=c(-40,40,2))
+points(mBMMNC@dr$tsne@cell.embeddings[!tp &  tp1removed,], pch=19, cex=.1, col='magenta')    # cell type
+points(mBMMNC@dr$tsne@cell.embeddings[!tp & !tp1removed,], pch=19, cex=.1, col='purple')  # both
+
+```
+
+
+```{r}
+mfold.fac <- rep(0, ncol(x.mouse))
+for (fold in 1:ksplits) { mfold.fac[as.numeric(unlist(lapply(m.kfold, function(x){x[[fold]]})))]<-fold }
+
+paste('Fraction proximal: ',
+      mean(table(!tp &  tp1removed, mfold.fac)['TRUE',] / table(mfold.fac)),
+      '+-',
+      sqrt(var(table(!tp &  tp1removed, mfold.fac)['TRUE',] / table(mfold.fac))))
+paste('Fraction distal: ',
+      mean(table(!tp & !tp1removed, mfold.fac)['TRUE',] / table(mfold.fac)),
+      '+-',
+      sqrt(var(table(!tp & !tp1removed, mfold.fac)['TRUE',] / table(mfold.fac))))
+
+```
+
+
+## Inter-species (human) performance
+
+Evaluate transfer learning.
+
+Predict human labels (and probabilities) using model trained exclusively on mouse data.
+
+```{r PredictHumanLabels}
+# Predict labels for human data
+modell.predict.human <- modell %>%
+                        lapply(function(model) {
+                          model %>% predict(x.human) %>% apply(1, function(x){y.mapping[which.max(x),2]})})
+
+# Establish consensus of predictions across all models (most frequent class - *MANAGE TIES*)
+modell.predict.human.consensus <- modell.predict.human %>%
+                                  abind::abind(along=2) %>%
+                                  apply(MARGIN = 1, function(labels) {
+                                    w <- labels %>% table() %>% sort(decreasing=T)
+                                    if ((max(w) >= 3) | (max(w)==2 & length(w) == 4)){ head(w, 1) %>% names
+                                      } else{ NA }
+                                    } ) 
+
+# Add as metadata
+hBMMNC@meta.data$NN_predict.consensus <- modell.predict.human.consensus
+```
+
+### Performance metrics (confusion, balanced Acc, precision, recall)
+
+```{r AccuracyConfusion, fig.width=4, fig.asp=1}
+# calculate frequency table
+cfm.freq.human.consensus <- table(list(predicted=modell.predict.human.consensus, true=hIdent),
+                                  useNA = 'always')
+
+# re-order
+cfm.freq.human.consensus <- rbind(cfm.freq.human.consensus[cfm.order, cfm.order[1:11]],
+                                  cfm.freq.human.consensus[15,        cfm.order[1:11]])
+
+# Consensus Performance
+cat('consensus performance: \n\n')
+    precall(cfm.freq.human.consensus) %>% lapply(mean)
+
+# Consensus Confusion Matrix (percent)
+cfm.freq.human.consensus.norm <- normalizeMat(cfm.freq.human.consensus, 2)
+
+# adapt human labels
+colnames(cfm.freq.human.consensus.norm)[8:9] <- c('Pro-/Pre-B', 'Immature B')
+rownames(cfm.freq.human.consensus.norm)[15] <- c('no agreement')
+
+# Visualize consensus across k-fold cross-val as heatmap
+heatmap(t(cfm.freq.human.consensus.norm),
+        scale = 'none', Rowv = NA, Colv = NA, revC = TRUE,
+        asp = 1, cexRow = 1, cexCol = 1, margins = c(10,8),
+        col = marray::maPalette(low = '#efefef', high = '#004529', k = 100))
+```
+### Feature Plot 
+
+Use consensus of predicted labels to color-code tSNE map.
+
+```{r FeaturePlotPrediction, fig.width=4, fig.asp=1}
+col <- sapply(unique(hBMMNC@meta.data$NN_predict.consensus),
+       function(x) { as.vector(mAnnot.res1.1$DPcolor[mAnnot.res1.1$CellType == x][1])})
+
+# match colors from mBMMNC annotation.1.1
+aplot <- TSNEPlot(object = hBMMNC, do.return = T, do.label = F, group.by = 'NN_predict.consensus', no.legend=T,
+                  colors.use = col,
+                  cells.use = names(hBMMNC@ident)[sample(1:9394, 9394)])
+aplot + theme(aspect.ratio=1) + coord_fixed()
+```
+
+### Localisation of misclassification
+
+```{r TruePosPlot, fig.asp=1, fig.width=3}
+# Not represented in human unsupervised clustering:
+hnre <- modell.predict.human.consensus %in% c('Endothelial Cells', 'Megakaryocytes', 'Basophils')
+# Misclassification
+htp <- (modell.predict.human.consensus == hIdent)
+# htp.c <- (modell.predict.human.consensus.coarse == hIdent.coarse)
+hnag <- is.na(modell.predict.human.consensus)
+# htv <- 1:9394 %in% c(ix.train.hs, ix.val.hs) # trainin or validation data
+
+htp1removed <- 
+lapply(1:length(hIdent), function(i) {
+  as.vector(modell.predict.human.consensus[i]) %in% as.vector(unlist(adjDict[as.vector(hIdent[i])])) 
+}) %>% unlist
+
+par(pty='s', mar=c(4,4,1,1)+0.1, pty='s')
+plot(hBMMNC@dr$tsne@cell.embeddings[htp & !hnag | hnre, ], pch=19, cex=.25, col='grey', las=1,
+     main='misclassification', xlab="Dimension 1", ylab="Dimension 2",
+     xaxp=c(-40,40,2), yaxp=c(-40,40,2))
+points(hBMMNC@dr$tsne@cell.embeddings[!htp &  htp1removed & !hnre,], pch=19, cex=.1, col='magenta') # cell type
+points(hBMMNC@dr$tsne@cell.embeddings[!htp & !htp1removed & !hnre,], pch=19, cex=.1, col='purple') # branch
+points(hBMMNC@dr$tsne@cell.embeddings[ hnag & !hnre,], pch=19, cex=.1, col='cyan')  # no agreement
+
+
+proxdisNA <- 100 *
+rbind(truePos = table(htp & !hnre & !hnag, hIdent)['TRUE',], 
+      proximal = table(htp1removed & !htp & !hnre & !hnag, hIdent)['TRUE',],
+      distal   = table(!htp1removed & !htp & !hnre & !hnag, hIdent)['TRUE',],
+      noAgreement = table(!hnre & hnag, hIdent)['TRUE',]) /
+    matrix(table(!hnre, hIdent)['TRUE',], byrow=T, nrow=4, ncol=11)
+write.table(proxdisNA, file='naive-ProxDisNoAgreement.txt', sep='\t', quote=F, row.names=T, col.names=T)
+# rm(hnre, htp, htp.c, hnag)
+```
+
+### Frequency table misclassification
+
+```{r}
+# Not represented in human unsupervised clustering:
+hnre <- modell.predict.human %>% lapply(FUN=function(x){x %in% c('Endothelial Cells', 'Megakaryocytes', 'Basophils')})
+
+# Misclassification
+htp <- modell.predict.human %>% lapply(FUN=function(x){x == hIdent})
+
+htp1removed <- 
+  lapply(modell.predict.human, FUN=function(k) { 
+    lapply(1:length(hIdent), function(i) {
+      as.vector(k[i]) %in% as.vector(unlist(adjDict[as.vector(hIdent[i])])) 
+}) %>% unlist })
+
+paste('Fraction proximal: ')
+for(i in 1:5){ print(mean(table(!htp[[i]] &  htp1removed[[i]] & !hnre[[i]], modell.predict.human[[i]])['TRUE',] /  table(modell.predict.human[[i]])))}
+
+paste('Fraction distal: ')
+for(i in 1:5){ table(!htp[[i]] & !htp1removed[[i]])['TRUE'] / ncol(x.human)}
+```
+
+#### Mutual information input ouput
+
+Calculate Mutual Information between input (discrete [0,1]) and output (probability discretized [low, mid, high])
+ 
+ - - - This is slow - time to get a cup of coffee - - -
+ 
+```{r MI_xp, warning=FALSE}
+source('./midi.R')
+
+n <- ncol(x.mouse)
+MI <- array(0, dim = c(n, 14, 5))
+
+for (fold in 1:5){
+# loop over folds and cell types then apply to each gene:
+  print(fold)
+  # extract indices of test data in fold
+  ix.test.mm <- m.kfold %>% lapply(function(x){x[[fold]]}) %>% unlist %>% as.numeric
+  # extract test data in fold
+  x <- x.mouse[ix.test.mm, ]
+
+  for (celltype in 1:14){
+    cat('celltype: ', celltype, '\n')
+    # extract output p: this stays the same for any given cell identity (calculate outside loop)
+    p <- modell.predict.p[[fold]][, celltype]
+    # calculate Mutual Information for each gene
+    MI[ , celltype, fold] <- x %>% apply(MARGIN = 2, midi, p=p)
+  }
+}
+
+ids <- MI %>% apply(1:2, median) %>% apply(2, order, decreasing=TRUE)
+MI.top100 <- ids %>% apply(2, function(x){x.mouse.names[x[1:100]]})
+colnames(MI.top100) <- y.mapping[,2]
+```
+
+```{r mouseMIheatmap, fig.width=4, fig.asp=1}
+
+# GOI <- MI.top100[1:17,c(8,11)] %>% as.vector # MK - HSPCs
+GOI <- MI.top100[1:20,c(6,10)] %>% as.vector # Pericytes - Endothelial Cells
+
+GOImap <- FeatureMap.mm[FeatureMap.mm$mgi_symbol %in% GOI & FeatureMap.mm$UseForTrainingNN,]
+
+# subset data 
+mdat <- mBMMNC@data[GOImap$ix_DGE_mm,
+            (mIdent %in% c('Pericytes', 'Endothelial Cells'))][,
+                    order(as.vector(mIdent[mIdent %in% c('Pericytes', 'Endothelial Cells')]))]
+
+# mdat <- mBMMNC@data[GOImap$ix_DGE_mm,
+#             (mIdent %in% c('Megakaryocytes', 'HSPCs'))][,
+#                     order(as.vector(mIdent[mIdent %in% c('Megakaryocytes', 'HSPCs')]))]
+
+
+# remove genes present in over 50% of both cell types
+# mdat <- mdat[!((( rowSums(mdat[,1:303] >0) / 303 ) > .5) & (( rowSums(mdat[,304:364] > 0) / 61 ) > .5)),]
+mdat <- mdat[!((( rowSums(mdat[,1:50] >0) / 50 ) > .5) & (( rowSums(mdat[,51:162] > 0) / 112 ) > .5)),]
+
+
+# re-order dendrogram
+gen <- as.matrix(mdat) %>% dist(method='manhattan') %>% hclust(method='complete') %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
+cel <- as.matrix(mdat) %>% t %>% dist(method='manhattan') %>% hclust(method='complete') %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
+
+# plot heatmap  
+as.matrix(mdat) %>% heatmap(scale='none', labCol=NA, Rowv=gen, Colv=cel,
+                            col=marray::maPalette(low='grey', mid='blue', high='green'),
+                            # ColSideColors = c(rep('#666666', 303), rep('#e7298a', 61)))
+                            ColSideColors = c(rep('#666666', 50), rep('#e7298a', 112)))
+```
+
+```{r humanMIheatmap}
+
+COI <- (modell.predict.human.consensus %in% c('Pericytes', 'Endothelial Cells')) & (hIdent %in% 'Pericytes')
+# COI <- (modell.predict.human.consensus %in% c('Megakaryocytes', 'HSPCs')) & (hIdent %in% 'HSPCs')
+GOI <- GOImap$ix_DGE_hs[GOImap$mgi_symbol %in% rownames(mdat)]
+
+hdat <- hBMMNC@data[GOI , COI]
+hdat <- hdat[,order(modell.predict.human.consensus[COI])]
+
+celh <- as.matrix(hdat) %>% t %>% dist(method='manhattan') %>% hclust %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
+
+hdat %>% as.matrix %>% heatmap(scale='none', labCol=NA,  Rowv=gen, Colv=celh,
+                            col=marray::maPalette(low='grey', mid='blue', high='green'),
+                            # ColSideColors = c(rep('#1b9e77', 164), rep('#66a61e', 61)))
+                            ColSideColors = c(rep('#666666', 13), rep('#e7298a', 41)))
+```
+
+```{r jointMIheatmap, fig.width=12}
+jdat <- as.matrix(cbind(mdat, hdat))
+
+# re-order dendrogram
+genj <- jdat %>% dist(method='manhattan') %>% hclust(method='complete') %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
+celj <- jdat %>% t %>% dist(method='manhattan') %>% hclust(method='complete') %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
+
+col <- c(rep('#666666',50), rep('#e7298a',112), rep('#999999',13), rep('#e97eb1',41))
+# col <-  c(rep('#1b9e77', 303), rep('#66a61e', 61), rep('#4cbf9d', 164), rep('#89bf4c', 61))
+names(col) <- colnames(jdat)
+celj <- dendroextras::set_leaf_colours(celj, col, col_to_set = 'edge')
+                
+
+heatmap(jdat, scale='none', labCol = NA, Colv=celj, Rowv=genj,
+        col=marray::maPalette(low='grey', mid='blue', high='green'),
+        # ColSideColors = c(rep('#1b9e77', 303), rep('#66a61e', 61), rep('#4cbf9d', 164), rep('#89bf4c', 61)))
+        ColSideColors = c(rep('#666666', 50), rep('#e7298a', 112), rep('#999999', 13), rep('#e97eb1', 41)))
+
+```
+

@@ -1,0 +1,118 @@
+---
+title: "Common Feature Map - Ensembl"
+author: "PS STUMPF"
+date: "December 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(biomaRt)
+```
+
+# Requirements
+
+Run once __01-pre-Processing-mouse.Rmd__ and __02-pre-Processing-human.Rmd__.
+
+# Load processed data
+
+```{r Load processed data}
+# mouse Seurat object
+load(file='../RData/mouseBMMNC-Seurat.RData')
+
+# human Seurat object
+load('../RData/humanBMMNC-Seurat.RData')
+```
+
+# Transfer learning Mouse / Human
+
+```{r BioMartSetup}
+# SetUp BioMart - Mouse-to-Human
+ensembl.mm = useMart("ensembl", dataset="mmusculus_gene_ensembl")
+# Ensembl look-up-table - Human-to-Mouse
+ensembl.hs = useMart("ensembl", dataset="hsapiens_gene_ensembl")
+```
+
+## Pre-processing
+
+Find mappable genes.
+  
+Find all mouse gene symbols and their corresponding ensembl ID and human homologs.
+
+```{r GeneMapping_Mouse}
+# For MOUSE DGE, find ensemble gene id and homolog ensemble id
+FeatureMap.mm <- getBM(attributes=c("mgi_symbol", "ensembl_gene_id"),
+                       filters="mgi_symbol", mart=ensembl.mm, values=mBMMNC@data@Dimnames[[1]])
+FeatureMap.mm.homolog <- getBM(attributes=c("ensembl_gene_id", "hsapiens_homolog_ensembl_gene", "hsapiens_homolog_associated_gene_name"),
+                               filters="mgi_symbol", mart=ensembl.mm, values=mBMMNC@data@Dimnames[[1]])
+# Merge by 'ensemble_gene_id' and clean up
+FeatureMap.mm <- merge(FeatureMap.mm, FeatureMap.mm.homolog); rm(FeatureMap.mm.homolog)
+```
+
+Now retrieve the same mapping from human to mouse.
+
+```{r GeneMapping_Human}
+# For HUMAN DGE, find ensemble gene id and homolog ensemble id
+FeatureMap.hs <- getBM(attributes=c("hgnc_symbol", "ensembl_gene_id"),
+                                    filters="hgnc_symbol", mart=ensembl.hs, values=hBMMNC@data@Dimnames[1])
+FeatureMap.hs.homolog <- getBM(attributes=c("ensembl_gene_id", "mmusculus_homolog_ensembl_gene", "mmusculus_homolog_associated_gene_name"),
+                                    filters="hgnc_symbol", mart=ensembl.hs, values=hBMMNC@data@Dimnames[1])
+# Merge by 'ensemble_gene_id' and clean up
+FeatureMap.hs <- merge(FeatureMap.hs, FeatureMap.hs.homolog); rm(FeatureMap.hs.homolog)
+
+```
+
+
+```{r CurateMouseMap}
+# Drop features without homologs
+FeatureMap.mm <- FeatureMap.mm[FeatureMap.mm$hsapiens_homolog_ensembl_gene != "", ]
+# keep only features that are also mappable
+FeatureMap.mm <- FeatureMap.mm[FeatureMap.mm$hsapiens_homolog_ensembl_gene  %in% FeatureMap.hs$ensembl_gene_id, ]
+# Remove redundant rows
+FeatureMap.mm <- unique(FeatureMap.mm)
+
+# Find DGE row index mappings
+for (i in 1:nrow(FeatureMap.mm)) {
+  ixDGEmm <- which(mBMMNC@data@Dimnames[[1]] == FeatureMap.mm$mgi_symbol[i])
+  ixDGEhs <- which(hBMMNC@data@Dimnames[[1]] == FeatureMap.mm$hsapiens_homolog_associated_gene_name[i])
+  FeatureMap.mm$ix_DGE_mm[i] <- ifelse(length(ixDGEmm)==1, ixDGEmm, NA)
+  FeatureMap.mm$ix_DGE_hs[i] <- ifelse(length(ixDGEhs)==1, ixDGEhs, NA)
+}
+# Remove redundant index mappings
+FeatureMap.mm <- FeatureMap.mm[!duplicated(FeatureMap.mm[,5:6]),]
+
+# Remove indices that are NA
+FeatureMap.mm <- FeatureMap.mm[!apply(is.na(FeatureMap.mm), 1, any), ] 
+```
+
+
+```{r CurateHumanMap}
+# Drop features without homologs
+FeatureMap.hs <- FeatureMap.hs[FeatureMap.hs$mmusculus_homolog_ensembl_gene != "", ]
+# keep only features that are also mappable
+FeatureMap.hs <- FeatureMap.hs[FeatureMap.hs$mmusculus_homolog_ensembl_gene %in% FeatureMap.mm$ensembl_gene_id, ]
+# Remove redundant rows
+FeatureMap.hs <- unique(FeatureMap.hs)
+
+# Find DGE row index mappings
+for (i in 1:nrow(FeatureMap.hs)) {
+  ixDGEhs <- which(hBMMNC@data@Dimnames[[1]] == FeatureMap.hs$hgnc_symbol[i])
+  ixDGEmm <- which(mBMMNC@data@Dimnames[[1]] == FeatureMap.hs$mmusculus_homolog_associated_gene_name[i])
+  FeatureMap.hs$ix_DGE_hs[i] <- ifelse(length(ixDGEhs)==1, ixDGEhs, NA)
+  FeatureMap.hs$ix_DGE_mm[i] <- ifelse(length(ixDGEmm)==1, ixDGEmm, NA)
+}
+# Remove redundant index mappings
+FeatureMap.hs <- FeatureMap.hs[!duplicated(FeatureMap.hs[,5:6]),]
+
+# Remove indices that are NA
+FeatureMap.hs <- FeatureMap.hs[!apply(is.na(FeatureMap.hs), 1, any), ] 
+```
+
+
+## Save mapping
+
+```{r}
+save(FeatureMap.mm, FeatureMap.hs, '../RData/EnsemblFeatureMap-MM-HS.RData')
+```
+
+
