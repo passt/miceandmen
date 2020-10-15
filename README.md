@@ -7,5 +7,5 @@ Stumpf et al. _Transfer learning efficiently maps bone marrow cell types from mo
 
 ## Additional data
 
-Due to size constraints, trained models and archived processed data used in this repository is available on Mendeley data (doi: ).
+Due to size constraints, trained models and archived processed data used in this repository is available on Mendeley data (DOI: 10.17632/csvm3kpkxd.1).
 
