@@ -1,0 +1,108 @@
+---
+title: "DropSeq HUMAN BMMNC - Visualisation"
+author: "PS STUMPF"
+date: "09 December 2017"
+output: html_document
+---
+
+# Reload Seurat Object
+
+```{r ReLoad_hBMMNC}
+load('../../2018-11-07-hBMMNC-Seurat.RData')
+```
+
+# Load additional annotation
+
+```{r Annotation}
+hBMMNC@meta.data$tBMeBM <- hBMMNC@meta.data$Population
+levels(hBMMNC@meta.data$tBMeBM) <- c('TBM', 'EBM', 'EBM', 'EBM', 'EBM')
+hBMMNC@meta.data$SpecimenEnrichment <- as.factor(paste(hBMMNC@meta.data$Specimen, hBMMNC@meta.data$tBMeBM, sep='_'))
+
+# Load cluster annotation human
+hAnnot.res1.1 <- read.table('../Metadata/hBMMNC_Annotation_res1.1.txt', sep='\t', header=T)
+hIdent <- factor(hBMMNC@meta.data$res.1.1)#, ordered = T)
+levels(hIdent) <- hAnnot.res1.1$CellType[1:16]
+```
+
+```{r TSNEviz, fig.width=5, fig.asp=0.9}
+# plot cluster annotation
+aplot <- TSNEPlot(object = hBMMNC, do.return=T, do.label = T, group.by='res.1.1', do.hover=F, dim.1=1, dim.2=2,
+                  colors.use = as.vector(hAnnot.res1.1$DPcolor),  no.legend=T,
+                  cells.use = names(hBMMNC@ident)[sample(1:9394, 9394)])
+aplot + theme(aspect.ratio=1) + coord_fixed(); rm(aplot)
+
+# plot enrichment
+aplot <- TSNEPlot(object = hBMMNC, do.return=T, do.label = T, group.by='tBMeBM', do.hover=F, dim.1=1, dim.2=2,
+                  colors.use = c('#a6cee3', '#1f78b4'),
+                  no.legend=T,
+                  cells.use = names(hBMMNC@ident)[sample(1:9394, 9394)])
+aplot + theme(aspect.ratio=1) + coord_fixed(); rm(aplot)
+
+# plot specimen
+aplot <- TSNEPlot(object = hBMMNC, do.return=T, do.label = F, group.by='Specimen', do.hover=F, dim.1=1, dim.2=2, no.legend=T,
+                  colors.use = c('#6a3d9a', '#1f78b4', '#33a02c'), cells.use = names(hBMMNC@ident)[sample(1:9394, 9394)])
+aplot + theme(aspect.ratio=1) + coord_fixed(); rm(aplot)
+
+# plot specimen & enrichment
+aplot <- TSNEPlot(object = hBMMNC, do.return=T, do.label = F, group.by='SpecimenEnrichment', do.hover=F, dim.1=1, dim.2=2, pt=1,
+                  colors.use = c('#cab2d6','#6a3d9a', '#a6cee3', '#1f78b4', '#b2df8a','#33a02c'),  no.legend=F,
+                  cells.use = names(hBMMNC@ident)[sample(1:9394, 9394)])
+aplot + theme(aspect.ratio=1) + coord_fixed(); rm(aplot)
+```
+
+
+```{r EmbeddingHeatmap, fig.width=4, fig.asp=1}
+source('embeddingHeatmap.R')
+
+# A ~ Erythropoiesis
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(hBMMNC, 'GYPA',  use.internal.col = F, z.range=c(.4,4))
+embeddingHeatmap(hBMMNC, 'GATA1', use.internal.col = F, z.range=c(.4,4))
+embeddingHeatmap(hBMMNC, 'HBB',   use.internal.col = F, z.range=c( 3,7))
+embeddingHeatmap(hBMMNC, 'PRDX2', use.internal.col = F, z.range=c(.4,4))
+
+# B ~ Granulopoiesis
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(hBMMNC, 'AZU1') # 0 Myeloblastin (PRTN3) much better than AZU1 or ELANE 
+embeddingHeatmap(hBMMNC, 'LTF') # 7
+embeddingHeatmap(hBMMNC, 'MMP9') # 3
+embeddingHeatmap(hBMMNC, 'FCGR3B') # 10
+
+# C ~ Monocytes
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(hBMMNC, 'KLF4')
+embeddingHeatmap(hBMMNC, 'VCAN')
+embeddingHeatmap(hBMMNC, 'CD14')
+embeddingHeatmap(hBMMNC, 'CD1C')
+# embeddingHeatmap(hBMMNC, 'FCGR3A')
+
+# D ~ Stem and Niche Cells
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(hBMMNC, 'CD34')
+embeddingHeatmap(hBMMNC, 'ANGPT1')
+embeddingHeatmap(hBMMNC, 'KIT')
+embeddingHeatmap(hBMMNC, 'KITLG')
+
+# E ~ Pericytes
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(hBMMNC, 'CXCL12')
+embeddingHeatmap(hBMMNC, 'LEPR')
+
+# F ~ Lymphopoiesis
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(hBMMNC, 'PAX5')
+embeddingHeatmap(hBMMNC, 'RAG2')
+embeddingHeatmap(hBMMNC, 'CD19')
+embeddingHeatmap(hBMMNC, 'MS4A1')
+
+# Fb memory B-Cells? T/NK
+par(mfcol=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(hBMMNC, 'IGHG2') # B
+embeddingHeatmap(hBMMNC, 'MZB1') # 
+embeddingHeatmap(hBMMNC, 'IL7R') # NK
+embeddingHeatmap(hBMMNC, 'KLRB1') # CD161
+```
+
+
+
+

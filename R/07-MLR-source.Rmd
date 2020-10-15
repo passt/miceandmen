@@ -17,7 +17,7 @@ Before running this Markdown go back and run __04-pre-Processing-for-ML.Rmd__.
 
 ```{r}
 # load 'm.kfold' containing previous indices of x-val test sets
-load(file = '../Models/Source/Source-xValSplits.RData')
+load(file = '../RData/Target-xValSplits.RData')
 ```
 
 
@@ -119,11 +119,12 @@ for (fold in 1:ksplits) {
 
 ```{r reLoadSavedModel}
 # load 'ix.test.mm' containing previous indices of x-val test sets
-load(file = '../Models/Source/Source-xValSplits.RData')
+load(file = '../RData/Source-xValSplits.RData')
 
-modell <- list()
-modell.predict.p <- list()
-modell.predict.f <- list()
+modell <-
+modell.predict <- 
+modell.predict.p <- 
+modell.predict.f <- 
 modell.predict.c <- list()
 
 ksplits = 5

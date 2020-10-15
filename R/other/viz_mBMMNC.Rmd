@@ -1,0 +1,142 @@
+---
+title: "DropSeq MOUSE BMMNC - Visualisation"
+author: "PS STUMPF"
+date: "2017"
+output: html_document
+---
+
+# Reload Seurat Object
+
+```{r LoadPreviousData}
+# load(file='../../2018-10-17-mBMMNC_M1-4.RData')
+```
+
+# Load additional annotation
+
+```{r TsneAnnotation}
+mAnnot.res1.1 <- read.table('../Metadata/mBMMNC_Annotation_res1.1.txt', sep='\t', header=T)
+mIdent <- factor(mBMMNC@meta.data$res.1.1)#, ordered = T)
+levels(mIdent) <- mAnnot.res1.1$CellType
+```
+
+# Visualize meta data on tSNE plot
+
+```{r TsneViz, fig.width=5, fig.asp=1}
+# Plot cluster information
+aplot <- TSNEPlot(object = mBMMNC, do.return=T, do.label = T, group.by='res.1.1', do.hover=F, dim.1=1, dim.2=2,
+                  colors.use = as.vector(mAnnot.res1.1$DPcolor),  no.legend=T,
+                  cells.use = names(mBMMNC@ident)[sample(1:5504, 5504)])
+aplot + theme(aspect.ratio=1) + coord_fixed(); rm(aplot)
+
+# Plot population
+aplot <- TSNEPlot(object = mBMMNC, do.return=T, do.label = T, group.by='Population', do.hover=F, dim.1=1, dim.2=2,
+                  colors.use = c('#a6cee3', '#1f78b4'), cells.use = names(mBMMNC@ident)[sample(1:5504, 5504)])
+aplot + theme(aspect.ratio=1) + coord_fixed(); rm(aplot)
+
+# Plot Specimen information
+aplot <- TSNEPlot(object = mBMMNC, do.return=T, do.label = T, group.by='Specimen', do.hover=F, dim.1=1, dim.2=2,
+                  colors.use = c('#6a3d9a', '#1f78b4', '#33a02c'), cells.use = names(mBMMNC@ident)[sample(1:5504, 5504)])
+aplot + theme(aspect.ratio=1) + coord_fixed(); rm(aplot)
+
+# plot Original Identiy
+aplot <- TSNEPlot(object = mBMMNC, do.return=T, do.label = F, group.by='orig.ident', do.hover=F, dim.1=1, dim.2=2, pt=1, 
+                  colors.use = c('#cab2d6','#6a3d9a', '#a6cee3', '#1f78b4',  '#b2df8a','#33a02c'),  no.legend=F,
+                  cells.use = names(mBMMNC@ident)[sample(1:5504, 5504)])
+aplot + theme(aspect.ratio=1) + coord_fixed(); rm(aplot)
+```
+
+## Embedding Heatmap (2D histogram)
+
+```{r, fig.width=4, fig.asp=1}
+source('embeddingHeatMap.R')
+
+# Figure S1
+# a Erythropoieisis
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(mBMMNC, 'Car2')
+embeddingHeatmap(mBMMNC, 'Hemgn')
+embeddingHeatmap(mBMMNC, 'Hba-a2')
+embeddingHeatmap(mBMMNC, 'Aldh1a1')
+
+# b Granulopoiesis
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(mBMMNC, 'Elane')
+embeddingHeatmap(mBMMNC, 'Ltf')
+embeddingHeatmap(mBMMNC, 'Retnlg')
+embeddingHeatmap(mBMMNC, 'Mcpt8')
+
+# c Monocytopoiesis
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(mBMMNC, 'Irf8')
+embeddingHeatmap(mBMMNC, 'Klf4')
+embeddingHeatmap(mBMMNC, 'Ccr2')
+embeddingHeatmap(mBMMNC, 'Cx3cr1')
+embeddingHeatmap(mBMMNC, 'Ms4a6c')
+# ctss (Cathepsin S)
+
+
+# d Stem and niche cells
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(mBMMNC, 'Kit')
+embeddingHeatmap(mBMMNC, 'Angpt1')
+embeddingHeatmap(mBMMNC, 'Kitl')
+embeddingHeatmap(mBMMNC, 'Tek')
+
+# e Endothelial cells and Pericytes
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(mBMMNC, 'Cdh5')
+embeddingHeatmap(mBMMNC, 'Cxcl12')
+embeddingHeatmap(mBMMNC, 'Kdr')
+embeddingHeatmap(mBMMNC, 'Lepr')
+
+# f Lymphopoiesis
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(mBMMNC, 'Flt3')
+embeddingHeatmap(mBMMNC, 'Il7r')
+# embeddingHeatmap(mBMMNC, 'Lef1') # Pre-b and Pre-t
+embeddingHeatmap(mBMMNC, 'Cd19') # Pro-b and Pre-b
+embeddingHeatmap(mBMMNC, 'Ms4a1') # [Cd20] Pre-b
+# embeddingHeatmap(mBMMNC, 'Trbc2') # Pre-t
+
+# g Megakaryocytes
+par(mfrow=c(2,2), mar=c(3.5,3.5,2,1)+.1, pty="s")
+embeddingHeatmap(mBMMNC, 'Pf4')
+embeddingHeatmap(mBMMNC, 'Ppbp')
+embeddingHeatmap(mBMMNC, 'Gp1bb')
+embeddingHeatmap(mBMMNC, 'Itga2b')
+```
+
+
+## Distribution of cell identities vs cell isolation mouse
+
+```{r}
+a <- table(mBMMNC@meta.data$res.1.1, mBMMNC@meta.data$orig.ident)
+a.csum <- a %>% colSums %>% matrix(nrow = nrow(a), ncol=ncol(a), byrow = TRUE)
+a.norm <- a / a.csum
+
+a.normdf <- a.norm %>% t %>% as.data.frame %>% cbind(group=rep(c('DBM', 'TBM'), 3))
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+a.meansd <- a.norm %>% t %>% as.data.frame %>% cbind(group=rep(c('DBM', 'TBM'), 3)) %>% data_summary(varname='Freq', groupnames=c('Var2', 'group'))
+
+at<-barplot(a.meansd$Freq, col=as.vector(mAnnot.res1.1$DPcolor) %>% rep(each=2), las=1, ylim = c(0,.3))
+stripchart(Freq~group+Var2, a.normdf, col='black', pch=19,
+           add=T, at=at, vertical=T)
+
+cbind(mAnnot.res1.1, 
+      mean=cbind(a.norm[,1] - a.norm[,2], a.norm[,3]-a.norm[,4], a.norm[,5]-a.norm[,6]) %>% apply(1, mean) *100,
+      sd=cbind(a.norm[,1] - a.norm[,2], a.norm[,3]-a.norm[,4], a.norm[,5]-a.norm[,6]) %>% apply(1, var) %>% sqrt()*100)
+
+```
+

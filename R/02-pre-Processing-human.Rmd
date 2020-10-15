@@ -13,7 +13,14 @@ knitr::opts_chunk$set(echo = TRUE)
 library(Seurat) # Single-cell RNA-seq analysis package by Satija group
 ```
 
-# Pre-processing
+## Requirements
+
+Download DGE matrix from ArrayExpress E-MTAB-8629.
+
+Link: https://www.ebi.ac.uk/arrayexpress/experiments/E-MTAB-8629/
+
+
+## Pre-processing
 
 ```{r ReadData}
 # Read Data
@@ -131,7 +138,7 @@ hBMMNC.tsne <- Rtsne::Rtsne(hBMMNC@dr$pca@cell.embeddings[,1:10], pca = FALSE, p
 hBMMNC@dr$tsne@cell.embeddings[,1:2] <- as.matrix(hBMMNC.tsne$Y) #rm(hBMMNC.tsne)
 ```
 
-# Save
+## Save Seurat
 
 ```{r}
 save(hBMMNC, file='../RData/humanBMMNC-Seurat.RData')

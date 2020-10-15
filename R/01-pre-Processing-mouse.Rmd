@@ -1,7 +1,7 @@
 ---
 title: "DropSeq MOUSE bone marrow mononuclear cells"
 author: "PS STUMPF"
-date: "December 2017"
+date: "2017"
 output: html_document
 ---
 
@@ -13,12 +13,13 @@ knitr::opts_chunk$set(echo = TRUE)
 library(Seurat) # Single-cell RNA-seq analysis package by Satija group
 ```
 
-# Requirements
+## Requirements
 
-Download DGE from ArrayExpress E-MTAB-8630.
+Download DGE matrix from ArrayExpress E-MTAB-8630.
 
 Link: https://www.ebi.ac.uk/arrayexpress/experiments/E-MTAB-8630/
 
+## Pre-processing 
 
 ```{r ReadData}
 # Read Data
@@ -130,7 +131,7 @@ mBMMNC.tsne <- Rtsne(mBMMNC@dr$pca@cell.embeddings[,1:11], pca = FALSE, perplexi
 mBMMNC@dr$tsne@cell.embeddings[,1:2] <- as.matrix(mBMMNC.tsne$Y); rm(mBMMNC.tsne)
 ```
 
-# Save
+# Save Seurat
 
 ```{r}
 save(mBMMNC, file='../RData/mouseBMMNC-Seurat.RData')

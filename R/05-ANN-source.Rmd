@@ -43,6 +43,13 @@ h.kfold <- lapply(split(1:length(hIdent), hIdent), kfold, ksplits=ksplits)
 # example: lapply(m.kfold, function(x){x[[k]]}) # for k-th fold
 ```
 
+# Re load splits used in paper
+
+```{r}
+load('../RData/Source-xValSplits.RData')
+```
+
+
 ## Fit k models
 
 ```{r TrainNNxVal}
@@ -139,11 +146,12 @@ for (fold in 1:ksplits) {
 
 ```{r reLoadSavedModel}
 # load 'ix.test.mm' containing previous indices of x-val test sets
-load(file = '../Models/Source/ANN/Source_ANN_xValSplits.RData')
+load(file = '../RData/Source-xValSplits.RData')
 
-modell <- list()
-modell.predict.p <- list()
-modell.predict.f <- list()
+modell <- 
+modell.predict <- 
+modell.predict.p <- 
+modell.predict.f <- 
 modell.predict.c <- list()
 
 ksplits = 5
@@ -371,11 +379,11 @@ aplot + theme(aspect.ratio=1) + coord_fixed()
 ```{r TruePosPlot, fig.asp=1, fig.width=3}
 # Not represented in human unsupervised clustering:
 hnre <- modell.predict.human.consensus %in% c('Endothelial Cells', 'Megakaryocytes', 'Basophils')
+
 # Misclassification
 htp <- (modell.predict.human.consensus == hIdent)
-# htp.c <- (modell.predict.human.consensus.coarse == hIdent.coarse)
 hnag <- is.na(modell.predict.human.consensus)
-# htv <- 1:9394 %in% c(ix.train.hs, ix.val.hs) # trainin or validation data
+
 
 htp1removed <- 
 lapply(1:length(hIdent), function(i) {
@@ -389,38 +397,21 @@ plot(hBMMNC@dr$tsne@cell.embeddings[htp & !hnag | hnre, ], pch=19, cex=.25, col=
 points(hBMMNC@dr$tsne@cell.embeddings[!htp &  htp1removed & !hnre,], pch=19, cex=.1, col='magenta') # cell type
 points(hBMMNC@dr$tsne@cell.embeddings[!htp & !htp1removed & !hnre,], pch=19, cex=.1, col='purple') # branch
 points(hBMMNC@dr$tsne@cell.embeddings[ hnag & !hnre,], pch=19, cex=.1, col='cyan')  # no agreement
-
-
-proxdisNA <- 100 *
-rbind(truePos = table(htp & !hnre & !hnag, hIdent)['TRUE',], 
-      proximal = table(htp1removed & !htp & !hnre & !hnag, hIdent)['TRUE',],
-      distal   = table(!htp1removed & !htp & !hnre & !hnag, hIdent)['TRUE',],
-      noAgreement = table(!hnre & hnag, hIdent)['TRUE',]) /
-    matrix(table(!hnre, hIdent)['TRUE',], byrow=T, nrow=4, ncol=11)
-write.table(proxdisNA, file='naive-ProxDisNoAgreement.txt', sep='\t', quote=F, row.names=T, col.names=T)
-# rm(hnre, htp, htp.c, hnag)
 ```
 
-### Frequency table misclassification
+```{r}
+# Overall
+mean(table(!htp &  htp1removed & !hnre, hIdent)['TRUE',] /  table(hIdent)) #proximal
+mean(table(!htp & !htp1removed & !hnre, hIdent)['TRUE',] /  table(hIdent)) #distal
+```
+
 
 ```{r}
-# Not represented in human unsupervised clustering:
-hnre <- modell.predict.human %>% lapply(FUN=function(x){x %in% c('Endothelial Cells', 'Megakaryocytes', 'Basophils')})
-
-# Misclassification
-htp <- modell.predict.human %>% lapply(FUN=function(x){x == hIdent})
-
-htp1removed <- 
-  lapply(modell.predict.human, FUN=function(k) { 
-    lapply(1:length(hIdent), function(i) {
-      as.vector(k[i]) %in% as.vector(unlist(adjDict[as.vector(hIdent[i])])) 
-}) %>% unlist })
-
-paste('Fraction proximal: ')
-for(i in 1:5){ print(mean(table(!htp[[i]] &  htp1removed[[i]] & !hnre[[i]], modell.predict.human[[i]])['TRUE',] /  table(modell.predict.human[[i]])))}
-
-paste('Fraction distal: ')
-for(i in 1:5){ table(!htp[[i]] & !htp1removed[[i]])['TRUE'] / ncol(x.human)}
+celltype = 'Pre-B'
+# human celltype Consensus proximal
+(table(!htp &  htp1removed & !hnre, hIdent)['TRUE', celltype] / table(hIdent)[celltype]) *100
+# human celltype Consensus distal
+(table(!htp & !htp1removed & !hnre, hIdent)['TRUE', celltype] / table(hIdent)[celltype]) *100
 ```
 
 #### Mutual information input ouput
@@ -430,7 +421,7 @@ Calculate Mutual Information between input (discrete [0,1]) and output (probabil
  - - - This is slow - time to get a cup of coffee - - -
  
 ```{r MI_xp, warning=FALSE}
-source('./midi.R')
+source('./other/midi.R')
 
 n <- ncol(x.mouse)
 MI <- array(0, dim = c(n, 14, 5))
@@ -455,6 +446,8 @@ for (fold in 1:5){
 ids <- MI %>% apply(1:2, median) %>% apply(2, order, decreasing=TRUE)
 MI.top100 <- ids %>% apply(2, function(x){x.mouse.names[x[1:100]]})
 colnames(MI.top100) <- y.mapping[,2]
+
+# save(MI.top100, filename = '../RData/Source-ANN-MI.RData')
 ```
 
 ```{r mouseMIheatmap, fig.width=4, fig.asp=1}
@@ -499,7 +492,7 @@ GOI <- GOImap$ix_DGE_hs[GOImap$mgi_symbol %in% rownames(mdat)]
 hdat <- hBMMNC@data[GOI , COI]
 hdat <- hdat[,order(modell.predict.human.consensus[COI])]
 
-celh <- as.matrix(hdat) %>% t %>% dist(method='manhattan') %>% hclust %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
+celh <- as.matrix(hdat) %>% t %>% dist(method='manhattan') %>% hclust %>% as.dendrogram # %>% dendextend::click_rotate(continue=TRUE)
 
 hdat %>% as.matrix %>% heatmap(scale='none', labCol=NA,  Rowv=gen, Colv=celh,
                             col=marray::maPalette(low='grey', mid='blue', high='green'),
@@ -511,8 +504,8 @@ hdat %>% as.matrix %>% heatmap(scale='none', labCol=NA,  Rowv=gen, Colv=celh,
 jdat <- as.matrix(cbind(mdat, hdat))
 
 # re-order dendrogram
-genj <- jdat %>% dist(method='manhattan') %>% hclust(method='complete') %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
-celj <- jdat %>% t %>% dist(method='manhattan') %>% hclust(method='complete') %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
+genj <- jdat %>% dist(method='manhattan') %>% hclust(method='complete') %>% as.dendrogram # %>% dendextend::click_rotate(continue=TRUE)
+celj <- jdat %>% t %>% dist(method='manhattan') %>% hclust(method='complete') %>% as.dendrogram # %>% dendextend::click_rotate(continue=TRUE)
 
 col <- c(rep('#666666',50), rep('#e7298a',112), rep('#999999',13), rep('#e97eb1',41))
 # col <-  c(rep('#1b9e77', 303), rep('#66a61e', 61), rep('#4cbf9d', 164), rep('#89bf4c', 61))

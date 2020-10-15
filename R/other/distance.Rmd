@@ -1,0 +1,185 @@
+---
+title: "Distance metrics"
+author: "PS STUMPF"
+date: "2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+mBM <- CreateSeuratObject(mBMMNC@raw.data) %>% PercentageFeatureSet(pattern = "^MT-", col.name = "percent.mt") %>% 
+  SCTransform(vars.to.regress = "percent.mt", variable.features.n = 4000, return.only.var.genes = F)
+```
+
+```{r}
+hBM <- CreateSeuratObject(hBMMNC@raw.data) %>% PercentageFeatureSet(pattern = "^MT-", col.name = "percent.mt") %>% 
+  SCTransform(vars.to.regress = c("percent.mt", 'orig.ident'), variable.features.n = 4000, return.only.var.genes = F)
+```
+
+
+
+```{r}
+mBM <- RunPCA(mBM, verbose = T)
+mBM <- RunUMAP(mBM, dims = 1:30)
+```
+
+```{r}
+hBM <- RunPCA(hBM, verbose = T)
+hBM <- RunUMAP(hBM, dims = 1:30)
+```
+
+# Aligned feature space
+
+... using ENSEMBL annotation of gene-orthologues
+
+# options
+```{r DataOptions}
+# # Options # #
+
+# Use union of variable genes?
+nn.trainOnVariableGeneUnion = TRUE
+
+# binarise data?
+nn.trainbinary = TRUE
+```
+
+## mouse
+
+
+```{r prepMouseData, echo=F, eval=T}
+# prep mouse data
+
+FeatureSubset.sct <-
+  FeatureMap.mm[FeatureSubset,] %>%
+  apply(MARGIN = 1, function(x){
+    m = (mBM[['SCT']]@meta.features %>% rownames) == x[2]
+    n = (hBM[['SCT']]@meta.features %>% rownames) == x[4] 
+    rbind(ifelse((sum(m)==1), which(m), 0),
+      ifelse((sum(n)==1), which(n), 0))
+    })
+
+FeatureSubset.sct <- FeatureSubset.sct[,!(FeatureSubset.sct==0) %>% apply(MARGIN = 2, FUN=any)]
+
+x.m <- mBM[['SCT']]@scale.data[FeatureSubset.sct[1,],]
+x.h <- hBM[['SCT']]@scale.data[FeatureSubset.sct[2,],]
+```
+
+## pca
+
+```{r}
+x.m.pca <- x.m %>% t %>% prcomp(center = F, scale=F)
+```
+
+### project human data
+
+```{r}
+x.h.pcam <- (x.h %>% t) %*% x.m.pca$rotation
+```
+
+### specify color vector
+
+```{r}
+col <- sapply(levels(mIdent),
+              function(x) { as.vector(mAnnot.res1.1$DPcolor[mAnnot.res1.1$CellType == x][1])})
+
+col.h <- sapply(levels(hIdent),
+              function(x) { as.vector(mAnnot.res1.1$DPcolor[mAnnot.res1.1$CellType == x][1])})
+
+mIdent.col <- as.vector(factor(mIdent, labels=col))
+hIdent.col <- as.vector(factor(hIdent, labels=col.h))
+
+```
+
+### Viz PCA outcome
+```{r, fig.width=6}
+par(pty='s', mar=c(4,4,1,1))
+x.m.pca$x[,c(2,4)] %>% plot(col=mIdent.col, pch=3, cex=.5)
+x.h.pcam[,c(2,4)] %>% points(col=hIdent.col, pch=1, cex=.5)
+```
+
+
+## Median centre distance
+
+```{r}
+dims = 1:16
+
+# m.med <- x.m %>% t %>%
+m.med <- x.m.pca$x[,dims] %>%
+                  by(INDICES = as.vector(mIdent),
+                                 FUN = Gmedian::Gmedian, simplify=T) %>%
+                              do.call(what='rbind')
+
+# add row names
+nom <- split(as.vector(mIdent), as.vector(mIdent)) %>% names
+rownames(m.med) <- paste0('m_',nom)
+
+
+# human
+# h.med <- x.h %>% t %>%
+h.med <- x.h.pcam[,dims] %>%
+                 by(INDICES = (modell.predict.human.consensus %>%
+                                           factor(levels = levels(mIdent)) %>% 
+                                           as.vector),
+                                 FUN=Gmedian::Gmedian, simplify=T) %>%
+                              do.call(what='rbind')
+rownames(h.med) <-  paste0('h_',nom)
+
+# human - Louvain id
+h.med.id <- x.h.pcam[,dims] %>%
+                 by(INDICES = (hIdent %>%
+                                           factor(levels = levels(mIdent)) %>% 
+                                           as.vector),
+                                 FUN=Gmedian::Gmedian, simplify=T) %>%
+                              do.call(what='rbind')
+rownames(h.med.id) <-  paste0('h_',nom)[-c(1,2,5)]
+
+# combine median centres and add names
+j.med <- rbind(m.med, h.med)
+```
+
+
+```{r}
+
+# cosine distance
+j.med.d <- j.med %>% proxy::dist(method = 'cosine', by_rows = T, convert_similarities = T, diag=T)
+j.med.sim <- j.med %>% proxy::dist(method = 'cosine', by_rows = T, convert_similarities = F, diag=T)
+
+# clustering
+par(mar=c(8,2,1,1));
+j.med.hc <- hclust(-j.med.sim+1, method = 'single') %>% as.dendrogram # %>% dendextend::click_rotate(continue=TRUE)
+
+# heatmap
+j.med.sim <- j.med.sim %>% as.matrix 
+diag(j.med.sim) <- 1
+
+j.med.sim%>% heatmap(Rowv = j.med.hc, Colv = j.med.hc, symm=T, revC = T, scale = 'n',
+                     cexRow = .75, cexCol = .75,
+                     ColSideColors = c(rep('#08306b',14), rep('#004529cc',14)),
+                     RowSideColors = c(rep('#08306b',14), rep('#004529cc',14)),
+                     col = marray::maPalette(low='#8e0152', mid='#f7f7f7', high='#276419', k = 101),
+                     zlim=c(-1,1))
+```
+
+```{r}
+
+# colors
+col.nom <- sapply(nom, function(x) { as.vector(mAnnot.res1.1$DPcolor[mAnnot.res1.1$CellType == x][1])})
+
+par(pty='s', mar=c(4,4,1,1))
+plot(y = as.vector(proxy::dist(m.med, h.med, method = 'cosine', by_rows = T, pairwise = T, convert_similarities = F))[-c(1,2,5)],
+     x = proxy::dist(m.med[-c(1,2,5),], h.med.id, method = 'cosine', by_rows = T, pairwise = T, convert_similarities = F) %>% as.vector,
+     col = col.nom[-c(1,2,5)],
+     pch = 19,las=1,
+     xlim=c(.6,1), ylim=c(.6,1),
+     xlab='Similarity (Louvain)',
+     ylab='Similarity (MLR)')
+
+abline(0,1)
+
+```
+
+

@@ -28,7 +28,7 @@ lledom <- list(list(), list(), list(), list(), list(),
 Sys.time()
 for (fold in 1:ksplits){
   for (i in 1:15)
-  lledom[[i]][[fold]] = keras::load_model_hdf5(filepath = paste0('../Models/Source/MLR/Source_MLR_Model_', fold, '.hdf5'))
+  lledom[[i]][[fold]] = keras::load_model_hdf5(filepath = paste0('../Models/Source/MLR/Source_MLR_Model', fold, '.hdf5'))
 }
 Sys.time()
 ```
@@ -84,16 +84,17 @@ nExmpl <- c(0:10, 15, 20, 25, 30)
 ix.test.hs <- htestix %>% unlist %>% as.numeric
 x.test <- x.human[ix.test.hs, ] 
 
-hstry <- list(list(), list(), list(), list(), list(), 
-              list(), list(), list(), list(), list(), 
-              list(), list(), list(), list(), list()) # empty list of lists
-lledom.predict.p <- hstry # same as above
-lledom.predict   <- hstry # same as above
-
+# empty list of lists
+# lledom <- # comment out when loading models
+# hstry <-  # comment out when loading models
+lledom.predict   <- 
+lledom.predict.p <- list(list(), list(), list(), list(), list(),
+                         list(), list(), list(), list(), list(), 
+                         list(), list(), list(), list(), list()) # empty list of lists
 
 # Loop over k-folds and re-train each using the same data:
 for (fold in 1:ksplits) {
-  cat('Fold: ' , fold, '\t i: ')
+  cat('\n Fold: ' , fold, '\t i: ')
   
   # extract training indices for fold k (reshape array to matrix with dim 32x11)
   ix.train.hs.k <- htrainix[ , ,-fold] %>% matrix(nrow = 4, byrow = T) %>% matrix(nrow=32)
@@ -102,48 +103,55 @@ for (fold in 1:ksplits) {
   # loop over i
   for (i in 15:1) {
     cat(i, '\t')
-    
-    if (i>1){
-      
-    # select 1:2^(i-1) examples i.e. the first c(1,2,4,8,16,32) and flatten matrix
-    ix.train.hs <- ix.train.hs.k[1:nExmpl[i],] %>% as.vector
-    
-    # extract training data for fold
-    x.train <- x.human[ix.train.hs, ]
-    y.train <- y.human.label[ix.train.hs, ]
-    
-    # extract validation data - this IS DEPENDENT on fold AND on number of training examples
-    x.val <- x.human[ix.val.hs, ]
-    y.val <- y.human.label[ix.val.hs, ]
-    
-    # replace if number of examples exceeds number of samples
-    if (nExmpl[i] < 5) {
-      rplce = T 
-    } else { rplce = F}
-    
-    # fit generator samples euqally across all classes (5 examples)
-    gen <- function(){
-      if (nExmpl[i] == 1){
-        ix.batch <- rep(1:11, each=5)
-      }
-      # sample for each batch
-      ix.batch <- tapply(1:nrow(x.train), hIdent[ix.train.hs], sample, size=5, replace=rplce) %>%
-                      unlist %>% as.vector
-      x.batch <- x.train[ix.batch,]
-      y.batch <- y.train[ix.batch,]
-      return(list(x.batch, y.batch))
+
+# # #
+# comment out below block when loading to enable prediction
+    {
+    # if (i>1){
+    #   
+    # # select 1:2^(i-1) examples i.e. the first c(1,2,4,8,16,32) and flatten matrix
+    # ix.train.hs <- ix.train.hs.k[1:nExmpl[i],] %>% as.vector
+    # 
+    # # extract training data for fold
+    # x.train <- x.human[ix.train.hs, ]
+    # y.train <- y.human.label[ix.train.hs, ]
+    # 
+    # # extract validation data - this IS DEPENDENT on fold AND on number of training examples
+    # x.val <- x.human[ix.val.hs, ]
+    # y.val <- y.human.label[ix.val.hs, ]
+    # 
+    # # replace if number of examples exceeds number of samples
+    # if (nExmpl[i] < 5) {
+    #   rplce = T 
+    # } else { rplce = F}
+    # 
+    # # fit generator samples euqally across all classes (5 examples)
+    # gen <- function(){
+    #   if (nExmpl[i] == 1){
+    #     ix.batch <- rep(1:11, each=5)
+    #   }
+    #   # sample for each batch
+    #   ix.batch <- tapply(1:nrow(x.train), hIdent[ix.train.hs], sample, size=5, replace=rplce) %>%
+    #                   unlist %>% as.vector
+    #   x.batch <- x.train[ix.batch,]
+    #   y.batch <- y.train[ix.batch,]
+    #   return(list(x.batch, y.batch))
+    # }
+    # 
+    # # Train the model
+    # hstry[[i]][[fold]] <- 
+    #     lledom[[i]][[fold]] %>% fit_generator(
+    #       generator = gen, 
+    #       steps_per_epoch = 30 * nExmpl[i] / 30,
+    #       epochs = 21, 
+    #       validation_data = list(x.val, y.val),
+    #       verbose = 1, 
+    # )
+    # }
     }
-  
-    # Train the model
-    hstry[[i]][[fold]] <- 
-        lledom[[i]][[fold]] %>% fit_generator(
-          generator = gen, 
-          steps_per_epoch = 30 * nExmpl[i] / 30,
-          epochs = 21, 
-          validation_data = list(x.val, y.val),
-          verbose = 1, 
-    )
-    }
+# comment out above block when loading
+# # #     
+    
   # predict probabilities for softmax classification
   lledom.predict.p[[i]][[fold]] <- lledom[[i]][[fold]] %>% predict(x.test)
   
@@ -193,10 +201,12 @@ for (fold in 1:ksplits){
     filepath = paste0('../Models/Target/MLR/transfer/Target-MLR-transfer-Model', fold, '_n', nExmpl[i], '.hdf5'))
 }
 Sys.time()
-load( file='../Models/Target/Target-xValSplits.RData')
+load( file='../RData/Target-xValSplits.RData')
 
 ```
 
+
+__NOTE__: When loading models, obtain probabilities by rerunning *reTrainHuman* chunk with training loop commented out.
 
 
 ```{r AccuracyConfusion, fig.width=4, fig.asp=1}
@@ -329,8 +339,8 @@ nExmpl <- c(0:10, 15, 20, 25, 30)
 #                  list(), list(), list(), list(), list(),
 #                  list(), list(), list(), list(), list())
 # hstry <- modellOA # empty list of lists
-modellOA.predict.p <- modellOA # same as above
-modellOA.predict   <- modellOA # same as above
+# modellOA.predict.p <- modellOA # same as above
+# modellOA.predict   <- modellOA # same as above
 
 
 # extract test indices
@@ -339,7 +349,7 @@ x.test <- x.human[ix.test.hs, ]
 
 # Loop over k-folds and re-train each using the same data:
 for (fold in 1:ksplits) {
-  cat('Fold: ' , fold, '\t i: ')
+  cat('\n Fold: ' , fold, '\t i: ')
   
   # extract training indices for fold k (reshape array to matrix with dim 32x11)
   ix.train.hs.k <- htrainix[ , ,-fold] %>% matrix(nrow = 4, byrow = T) %>% matrix(nrow=32)
@@ -363,7 +373,10 @@ for (fold in 1:ksplits) {
       # extract validation data - this IS DEPENDENT on fold AND on number of training examples
       x.val <- x.human[ix.val.hs, ]
       y.val <- y.human.label[ix.val.hs, ]
-      
+
+# # #
+# comment out below block when loading
+    {      
     # # Build Model
     # modellOA[[i]][[fold]] <- build_model(in_shape = ncol(x.human))
     # 
@@ -403,7 +416,10 @@ for (fold in 1:ksplits) {
     #       validation_data = list(x.val, y.val),
     #       verbose = 1)
     #   }
-    # 
+    }
+# comment out above block when loading
+# # # 
+      
     # predict probabilities for softmax classification
     modellOA.predict.p[[i]][[fold]] <- modellOA[[i]][[fold]] %>% predict(x.test)
     
@@ -420,19 +436,21 @@ for (fold in 1:ksplits) {
 ### Save Model
 
 ```{r}
-Sys.time()
-for (fold in 1:ksplits){
-  for (i in 1:15)
-  keras::save_model_hdf5(modellOA[[i]][[fold]],
-                         filepath = paste0('../Models/Target/MLR/random/Target-MLR-random-Model', fold, '_n', nExmpl[i], '.hdf5'),
-                         overwrite = TRUE)
-}
-Sys.time()
+# Sys.time()
+# for (fold in 1:ksplits){
+#   for (i in 1:15)
+#   keras::save_model_hdf5(modellOA[[i]][[fold]],
+#                          filepath = paste0('../Models/Target/MLR/random/Target-MLR-random-Model', fold, '_n', nExmpl[i], '.hdf5'),
+#                          overwrite = TRUE)
+# }
+# Sys.time()
 ```
 
 ### Load Model
 
 ```{r}
+modellOA.predict   <-
+modellOA.predict.p <-
 modellOA <- list(list(), list(), list(), list(), list(), 
                  list(), list(), list(), list(), list(), 
                  list(), list(), list(), list(), list())
@@ -545,11 +563,8 @@ abline(h=-log10(0.01), col='magenta', lty=3)
 ```{r}
 datOA <- metricsOA['F1', , , ] %>% apply(c(1,3), mean, na.rm=T)
 
-# # re-order dendrogram
-# gen <- as.matrix(datOA) %>% dist(method='euclidean') %>% hclust(method='complete') %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
-
 datTL <- metricsTL['F1', , , ] %>% apply(c(1,3), mean, na.rm=T)
-# ctyp <- as.matrix(datTL) %>% dist(method='euclidean') %>% hclust(method='complete') %>% as.dendrogram %>% dendextend::click_rotate(continue=TRUE)
+ctyp <- as.matrix(datTL) %>% dist(method='euclidean') %>% hclust(method='complete') %>% as.dendrogram #%>% dendextend::click_rotate(continue=TRUE)
 
 
 heatmap(datOA, Rowv = ctyp, #metricsTL['F1', , , ] %>% apply(c(1,3), mean, na.rm=T),
