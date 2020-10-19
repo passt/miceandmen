@@ -24,3 +24,6 @@ Original scRNAseq data is available from ArrayExpress:
 Pre-print: Stumpf et al. (2019) _Mapping biology from mouse to man using transfer learning_:
 
 - https://doi.org/10.1101/2019.12.26.888842
+
+
+[![DOI](https://zenodo.org/badge/167970392.svg)](https://zenodo.org/badge/latestdoi/167970392)
