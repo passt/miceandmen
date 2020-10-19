@@ -3,7 +3,7 @@
 
 This repository contains code related to:
 
-Stumpf et al. _Transfer learning efficiently maps bone marrow cell types from mouse to human using single-cell RNA sequencing_ Communications Biology (2020).
+Stumpf et al. _Transfer learning efficiently maps bone marrow cell types from mouse to human using single-cell RNA sequencing_ (2020).
 
 ## Additional data
 
@@ -20,6 +20,6 @@ Original scRNAseq data is available from ArrayExpress:
 
 ## References
 
-Preprint: Stumpf et al. (2019) _Mapping biology from mouse to man using transfer learning_:
+Pre-print: Stumpf et al. (2019) _Mapping biology from mouse to man using transfer learning_:
 
 - https://doi.org/10.1101/2019.12.26.888842
