@@ -7,7 +7,7 @@ output: html_document
   
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-reticulate::use_condaenv(condaenv = 'kerasRTF', conda = '/Users/stumpf/opt/miniconda3/bin/conda', required = T)
+# reticulate::use_condaenv(condaenv = 'kerasRTF', conda = '/Users/username/opt/miniconda3/bin/conda', required = T)
 require(keras)
 require(Seurat)
 
