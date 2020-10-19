@@ -26,4 +26,7 @@ Pre-print: Stumpf et al. (2019) _Mapping biology from mouse to man using transfe
 - https://doi.org/10.1101/2019.12.26.888842
 
 
+
+passt. (2020, October 19). passt/miceandmen: Code released with manuscript. (Version v1.0). Zenodo.
+
 [![DOI](https://zenodo.org/badge/167970392.svg)](https://zenodo.org/badge/latestdoi/167970392)
